@@ -224,21 +224,29 @@ For the POC, we add a **lightweight tagging evaluation** step to check whether t
 ### 8.1 Tagging Test Dataset
 
 - Store a simple JSONL file at `datasets/tagging_test.jsonl` with records:
-  - `story_id`
-  - `story_title`
-  - `story_description`
-  - `story_acceptance_criteria` (list of strings)
-  - `gold_tag` (`"new" | "gap" | "extend" | "conflict"`)
-  - `gold_related_ids` (optional list of ADO ids used when labeling)
+  - **Generated story (the one being tagged):**
+    - `story_title`
+    - `story_description`
+    - `story_acceptance_criteria` (list of strings)
+  - **Existing stories context (snapshot of what was available at tagging time):**
+    - `existing_stories` (list of objects with `work_item_id`, `title`, `description`, `acceptance_criteria`)
+  - **Gold label:**
+    - `gold_tag` (`"new" | "gap" | "extend" | "conflict"`)
+    - `gold_related_ids` (optional list of ADO work item IDs that the human labeler considered when deciding the tag)
 
 ### 8.2 Evaluation Script
 
 - CLI script `evaluate_tagging.py`:
   1. Loads `datasets/tagging_test.jsonl`.
-  2. For each record, calls the **same Tagging Agent pipeline** used in the main flow (embed → retrieve existing stories → Tagging Agent LLM call).
+  2. For each record:
+     - Takes the **generated story** (title, description, ACs).
+     - Uses the **provided `existing_stories`** snapshot (no live retrieval from Pinecone; uses the fixed set from the dataset).
+     - Calls the **Tagging Agent LLM** with the same prompt structure used in the main flow.
   3. Compares predicted `decision_tag` with `gold_tag`.
   4. Counts TP/FP/FN per class and computes precision/recall/F1 per tag and macro-average.
   5. Writes a small JSON report to `eval/tagging_f1.json`.
+
+This approach ensures the evaluation is **reproducible** (same existing stories context every time) and tests the LLM's reasoning given a fixed comparison set.
 
 This keeps evaluation implementation minimal but still provides a concrete quality signal for the tagging behavior.
 
