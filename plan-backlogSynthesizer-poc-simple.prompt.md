@@ -46,7 +46,7 @@ Non-goals / out-of-scope for this POC:
   - For each item, build `text = title + '\n' + description + '\n' + acceptanceCriteria`.
   - Embed with `text-embedding-3-small`.
   - Upsert into one Pinecone index, namespace = project name.
-  - Metadata (minimal): `work_item_id`, `work_item_type`, `state`, `parent_id`, `project`.
+  - Metadata (minimal): `work_item_id`, `work_item_type`, `state`, `parent_id`, `project`, `doc_type='ado_backlog'`.
 
 ### 2.2 Architecture Loader
 
@@ -55,9 +55,13 @@ Non-goals / out-of-scope for this POC:
 **Implementation (minimal):**
 - CLI script `arch_loader.py`:
   - Inputs: `--project`, `--path` to folder of docs.
-  - For each file, convert to text (use a simple library or only `.md` for POC).
-  - Naive chunking: fixed-size chunks by characters (e.g. 1500 chars, 300 overlap).
-  - Embed each chunk and upsert into same Pinecone index, namespace = project name.
+  - For each file, convert to text (support `.md`, `.docx`, `.pdf` using libraries like `python-docx` and `PyPDF2`).
+  - Smart chunking using `RecursiveTokenChunker` from `chunking_evaluation.chunking`:
+    - `chunk_size = 1000` (character length, roughly 500 tokens).
+    - `chunk_overlap = 200`.
+    - `separators = ["\n\n", "\n", ".", "?", "!", " ", ""]` (optimized for semantic coherence).
+  - Embed each chunk with `text-embedding-3-small` (same model as ADO backlog loader).
+  - Upsert into same Pinecone index, namespace = project name.
   - Metadata (minimal): `doc_type='architecture'`, `file_name`, `project`.
 
 No retries, no observability, no JSONL artifacts required for POC (optional to add).
@@ -128,14 +132,18 @@ For each segment:
 Using the intent vector, query Pinecone **twice**:
 - ADO items:
   - Namespace = project.
-  - Filter: `source_type='ado_backlog'` (or via separate index if simpler).
+  - Filter: `doc_type='ado_backlog'` (or via separate index if simpler).
   - `top_k = 5`.
+  - **Similarity threshold**: `min_similarity = 0.7` (configurable).
+  - Filter results to only include matches with `score >= min_similarity`.
 - Architecture constraints:
   - Namespace = project.
   - Filter: `doc_type='architecture'`.
   - `top_k = 5`.
+  - **Similarity threshold**: `min_similarity = 0.7` (configurable).
+  - Filter results to only include matches with `score >= min_similarity`.
 
-For POC, skip complex ranking; just use similarity score returned by Pinecone and keep the `top_k` results.
+For POC, skip complex ranking; just use similarity score returned by Pinecone and apply the threshold filter to keep only relevant results.
 
 ### 5.3 Prompt Assembly
 
@@ -183,16 +191,24 @@ For each story:
   - Namespace = project.
   - Filter: `work_item_type='Story'` (or `User Story`, depending on loader).
   - `top_k = 10`.
+  - **Similarity threshold**: `min_similarity = 0.7` (configurable).
+  - Filter results to only include matches with `score >= min_similarity`.
+
+**Early exit optimization:**
+- If **all** retrieved stories fall below the threshold (i.e., no relevant matches found), automatically tag the story as `"new"` without calling the Tagging Agent LLM.
+- Record this decision in `tagging.jsonl` with `decision_tag="new"`, `related_ids=[]`, and `reason="No similar existing stories found (all below threshold)"`.
 
 ### 6.3 Tagging Agent Call
+
+**Only called if at least one existing story passes the similarity threshold** (see 6.2).
 
 Prompt includes:
 - Generated story (title, description, ACs).
 - List of retrieved existing stories (id, title, short description, similarity score).
-- Simple rules for deciding **one** of: `new`, `gap`, `extend`, `conflict`.
+- Simple rules for deciding **one** of: `new`, `gap`, `conflict`.
 
 LLM returns structured JSON:
-- `decision_tag`: `"new" | "gap" | "extend" | "conflict"`
+- `decision_tag`: `"new" | "gap" | "conflict"`
 - `related_ids`: list of ADO work item IDs considered most relevant.
 - Optional `reason` (short text for debugging).
 
@@ -201,7 +217,9 @@ Supervisor:
 - Also updates in-memory backlog items with `assigned_tag`.
 
 POC simplifications:
-- No threshold tuning; rely on the LLM to reason using similarity scores.
+- Threshold filtering happens before LLM call (see 6.2 early exit).
+- LLM only reasons over stories that are sufficiently similar.
+- Only three tag values: `new` (no similar stories), `gap` (fills a gap or extends existing work), `conflict` (contradicts existing stories).
 
 The tagging output produced here is the main input to the simple evaluation in Section 8.
 
@@ -212,7 +230,7 @@ This step can be **skipped** initially; if included, keep it minimal:
 
 - CLI script `ado_writer.py` with one command:
   - Reads `runs/{run_id}/generated_backlog.jsonl` and `tagging.jsonl`.
-  - For each item with `assigned_tag` in `{ "new", "extend", "gap" }`:
+  - For each item with `assigned_tag` in `{ "new", "gap" }`:
     - For POC, **only create new ADO items** (Epics/Features/Stories) with parent relationships.
   - No PATCH/modify of existing items; no idempotency hashing, no retries.
 
@@ -231,7 +249,7 @@ For the POC, we add a **lightweight tagging evaluation** step to check whether t
   - **Existing stories context (snapshot of what was available at tagging time):**
     - `existing_stories` (list of objects with `work_item_id`, `title`, `description`, `acceptance_criteria`)
   - **Gold label:**
-    - `gold_tag` (`"new" | "gap" | "extend" | "conflict"`)
+    - `gold_tag` (`"new" | "gap" | "conflict"`)
     - `gold_related_ids` (optional list of ADO work item IDs that the human labeler considered when deciding the tag)
 
 ### 8.2 Evaluation Script
@@ -270,6 +288,9 @@ openai:
   api_key_env_var: OPENAI_API_KEY
   embedding_model: text-embedding-3-small
   chat_model: gpt-4o
+
+retrieval:
+  min_similarity_threshold: 0.7  # Filter out results below this score
 
 project:
   name: your-project
