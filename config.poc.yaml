@@ -1,0 +1,20 @@
+ado:
+  organization: rickywck
+  project: rde-lab
+  pat_env_var: ADO_PAT
+
+pinecone:
+  api_key_env_var: PINECONE_API_KEY
+  index_name: rde-lab
+  environment: us-east-1
+
+openai:
+  api_key_env_var: OPENAI_API_KEY
+  embedding_model: text-embedding-3-small
+  chat_model: gpt-4o
+
+retrieval:
+  min_similarity_threshold: 0.5
+
+project:
+  name: poc

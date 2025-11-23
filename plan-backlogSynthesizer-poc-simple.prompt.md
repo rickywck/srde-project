@@ -247,10 +247,10 @@ For the POC, we add a **lightweight tagging evaluation** step to check whether t
     - `story_description`
     - `story_acceptance_criteria` (list of strings)
   - **Existing stories context (snapshot of what was available at tagging time):**
-    - `existing_stories` (list of objects with `work_item_id`, `title`, `description`, `acceptance_criteria`)
+    - `existing_stories` (list of objects with `title`, `description`, `acceptance_criteria`)
   - **Gold label:**
     - `gold_tag` (`"new" | "gap" | "conflict"`)
-    - `gold_related_ids` (optional list of ADO work item IDs that the human labeler considered when deciding the tag)
+    - `gold_related_ids` (optional list of identifiers or titles the human labeler considered when deciding the tag)
 
 ### 8.2 Evaluation Script
 
