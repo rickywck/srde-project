@@ -365,9 +365,13 @@ The tool invocation is logged and results are displayed in the chat interface.
 ---
 ## 9. Minimal Evaluation
 
-For the POC, we add a **lightweight tagging evaluation** step to check whether the Tagging Agent is behaving sensibly on a small labeled dataset.
+For the POC, we add two **lightweight evaluation** approaches to assess system quality:
 
-### 9.1 Tagging Test Dataset
+### 9.1 Tagging Evaluation (Traditional Metrics)
+
+This evaluates whether the Tagging Agent correctly classifies stories relative to existing backlog.
+
+#### 9.1.1 Tagging Test Dataset
 
 - Store a simple JSONL file at `datasets/tagging_test.jsonl` with records:
   - **Generated story (the one being tagged):**
@@ -380,7 +384,7 @@ For the POC, we add a **lightweight tagging evaluation** step to check whether t
     - `gold_tag` (`"new" | "gap" | "conflict"`)
     - `gold_related_ids` (optional list of identifiers or titles the human labeler considered when deciding the tag)
 
-### 9.2 Evaluation Script
+#### 9.1.2 Tagging Evaluation Script
 
 - CLI script `evaluate_tagging.py`:
   1. Loads `datasets/tagging_test.jsonl`.
@@ -394,7 +398,115 @@ For the POC, we add a **lightweight tagging evaluation** step to check whether t
 
 This approach ensures the evaluation is **reproducible** (same existing stories context every time) and tests the LLM's reasoning given a fixed comparison set.
 
-This keeps evaluation implementation minimal but still provides a concrete quality signal for the tagging behavior.
+### 9.2 Backlog Generation Evaluation (LLM-as-a-Judge)
+
+This evaluates the overall quality and effectiveness of generated backlog items using an LLM as a judge.
+
+#### 9.2.1 Evaluation Dataset
+
+- Store test cases at `datasets/eval_dataset.json` with records:
+  - **Input:**
+    - `segment_text`: The original meeting note segment
+    - `retrieved_context`: Snapshot of ADO items and architecture constraints provided to generation agent
+  - **Generated output:**
+    - `generated_backlog`: List of generated epics/features/stories with full details
+  - **Reference (optional):**
+    - `reference_backlog`: Optional human-created backlog items for comparison
+
+#### 9.2.2 LLM Judge Evaluation Script
+
+- CLI script `evaluate_backlog_generation.py`:
+  1. Loads `datasets/eval_dataset.json`.
+  2. For each test case:
+     - Constructs a judge prompt containing:
+       - Original segment text
+       - Retrieved context (existing ADO items + architecture constraints)
+       - Generated backlog items
+       - Evaluation criteria (see below)
+     - Calls **Judge LLM** (e.g., `gpt-4o` or `claude-3-5-sonnet`) to score the generation.
+  3. Judge LLM evaluates on multiple dimensions with scores (1-5 scale):
+     
+     **Completeness (1-5):**
+     - Does the generated backlog capture all key requirements from the segment?
+     - Are critical details missing?
+     
+     **Relevance (1-5):**
+     - Are the generated items relevant to the segment content?
+     - Is there hallucinated or off-topic content?
+     
+     **Consistency (1-5):**
+     - Do the items align with retrieved architecture constraints?
+     - Are there conflicts with existing ADO backlog items?
+     
+     **Quality (1-5):**
+     - Are titles clear and concise?
+     - Are descriptions detailed and actionable?
+     - Are acceptance criteria specific and testable?
+     
+     **Hierarchy (1-5):**
+     - Is the Epic → Feature → Story hierarchy logical?
+     - Are parent-child relationships appropriate?
+     
+  4. Judge LLM returns structured JSON:
+     ```json
+     {
+       "completeness": {"score": 4, "reasoning": "..."},
+       "relevance": {"score": 5, "reasoning": "..."},
+       "consistency": {"score": 3, "reasoning": "..."},
+       "quality": {"score": 4, "reasoning": "..."},
+       "hierarchy": {"score": 5, "reasoning": "..."},
+       "overall_score": 4.2,
+       "summary": "The generated backlog effectively captures...",
+       "suggestions": ["Consider adding...", "Clarify..."]
+     }
+     ```
+  
+  5. Aggregates scores across all test cases and writes report to `eval/backlog_generation_judge.json`:
+     - Per-dimension averages and distributions
+     - Overall average score
+     - Detailed per-case breakdowns
+     - Common issues and patterns identified by judge
+
+#### 9.2.3 Judge Prompt Template
+
+The judge prompt follows this structure:
+
+```
+You are an expert product manager and backlog quality evaluator. Evaluate the generated backlog items based on the original segment and context provided.
+
+## Original Segment:
+{segment_text}
+
+## Retrieved Context:
+### Existing ADO Items:
+{retrieved_ado_items}
+
+### Architecture Constraints:
+{retrieved_architecture}
+
+## Generated Backlog:
+{generated_backlog_items}
+
+## Evaluation Task:
+Rate the generated backlog on the following dimensions (1-5 scale):
+1. Completeness: Does it capture all key requirements?
+2. Relevance: Are items relevant without hallucinations?
+3. Consistency: Does it align with architecture and existing items?
+4. Quality: Are titles, descriptions, and ACs well-written?
+5. Hierarchy: Is the Epic/Feature/Story structure logical?
+
+Provide scores, reasoning, and actionable suggestions for improvement.
+```
+
+### 9.3 Combined Evaluation Report
+
+A summary script `generate_eval_report.py` combines both evaluation results:
+- Tagging accuracy metrics (precision/recall/F1)
+- Backlog generation quality scores (LLM judge)
+- Overall system effectiveness assessment
+- Recommendations for prompt tuning or architecture changes
+
+This dual evaluation approach provides both **objective metrics** (tagging accuracy) and **holistic quality assessment** (LLM judge) to validate the POC's effectiveness.
 
 ---
 ## 10. Minimal Configuration
