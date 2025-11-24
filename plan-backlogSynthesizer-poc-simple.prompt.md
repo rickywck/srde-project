@@ -474,32 +474,27 @@ This evaluates the overall quality and effectiveness of generated backlog items 
        - Evaluation criteria (see below)
      - Calls **Judge LLM** (e.g., `gpt-4o` or `claude-3-5-sonnet`) to score the generation.
   3. Judge LLM evaluates on multiple dimensions with scores (1-5 scale):
-     
-     **Completeness (1-5):**
-     - Does the generated backlog capture all key requirements from the segment?
-     - Are critical details missing?
-     
-     **Relevance (1-5):**
-     - Are the generated items relevant to the segment content?
-     - Is there hallucinated or off-topic content?
-     
-     **Consistency (1-5):**
-     - Do the items align with retrieved architecture constraints?
-     - Are there conflicts with existing ADO backlog items?
-     
+    
+    **Completeness (1-5):**
+    - Does the generated backlog capture all key requirements from the segment?
+    - Are critical details missing?
+    
+    **Relevance (1-5):**
+    - Are the generated items relevant to the segment content?
+    - Is there hallucinated or off-topic content?
+    
     **Quality (1-5):**
-     - Are titles clear and concise?
-     - Are descriptions detailed and actionable?
-     - Are acceptance criteria specific and testable?
+    - Are titles clear and concise?
+    - Are descriptions detailed and actionable?
+    - Are acceptance criteria specific and testable?
      
   4. Judge LLM returns structured JSON:
      ```json
      {
        "completeness": {"score": 4, "reasoning": "..."},
        "relevance": {"score": 5, "reasoning": "..."},
-       "consistency": {"score": 3, "reasoning": "..."},
        "quality": {"score": 4, "reasoning": "..."},
-       "overall_score": 4.0,
+       "overall_score": 4.3,
        "summary": "The generated backlog effectively captures...",
        "suggestions": ["Consider adding...", "Clarify..."]
      }
@@ -535,8 +530,7 @@ You are an expert product manager and backlog quality evaluator. Evaluate the ge
 Rate the generated backlog on the following dimensions (1-5 scale):
 1. Completeness: Does it capture all key requirements?
 2. Relevance: Are items relevant without hallucinations?
-3. Consistency: Does it align with architecture and existing items?
-4. Quality: Are titles, descriptions, and ACs well-written?
+3. Quality: Are titles, descriptions, and ACs well-written?
 
 Provide scores, reasoning, and actionable suggestions for improvement.
 ```
