@@ -219,6 +219,147 @@ async def get_tagging(run_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get tagging: {str(e)}")
 
+@app.post("/generate-backlog/{run_id}")
+async def generate_backlog(run_id: str):
+    """
+    Execute the full backlog generation workflow:
+    1. Segment document
+    2. Retrieve context from vector DB (placeholder)
+    3. Generate backlog items (placeholder)
+    
+    Currently returns segmentation results as output.
+    """
+    try:
+        run_dir = get_run_dir(run_id)
+        
+        # Check if run exists and has a document
+        raw_file = run_dir / "raw.txt"
+        if not raw_file.exists():
+            raise HTTPException(status_code=404, detail=f"No document found for run {run_id}")
+        
+        # Load document
+        with open(raw_file, "r") as f:
+            document_text = f.read()
+        
+        # Step 1: Segment the document
+        save_chat_history(run_id, "system", "Starting backlog generation workflow...")
+        save_chat_history(run_id, "system", "Step 1: Segmenting document...")
+        
+        segmentation_result = await supervisor.segment_document(run_id, document_text)
+        
+        if segmentation_result["status"] == "error":
+            raise HTTPException(status_code=500, detail=segmentation_result["error"])
+        
+        segments = segmentation_result["segments"]
+        save_chat_history(run_id, "system", f"✓ Created {len(segments)} segments")
+        
+        # Step 2: Retrieve context (placeholder - not yet implemented)
+        save_chat_history(run_id, "system", "Step 2: Retrieving context from vector DB...")
+        retrieval_results = []
+        for i, segment in enumerate(segments, 1):
+            retrieval_results.append({
+                "segment_id": segment["segment_id"],
+                "status": "placeholder",
+                "message": "Retrieval tool not yet implemented",
+                "retrieved_ado_items": [],
+                "retrieved_architecture": []
+            })
+        save_chat_history(run_id, "system", "⚠ Retrieval tool not yet implemented (placeholder)")
+        
+        # Step 3: Generate backlog items (placeholder - not yet implemented)
+        save_chat_history(run_id, "system", "Step 3: Generating backlog items...")
+        generation_results = []
+        for i, segment in enumerate(segments, 1):
+            generation_results.append({
+                "segment_id": segment["segment_id"],
+                "status": "placeholder",
+                "message": "Backlog generation agent not yet implemented",
+                "generated_items": []
+            })
+        save_chat_history(run_id, "system", "⚠ Backlog generation agent not yet implemented (placeholder)")
+        
+        # Format output response showing segmentation results
+        output_lines = [
+            "🎯 Backlog Generation Workflow Complete (Partial)",
+            "",
+            "=" * 60,
+            "STEP 1: DOCUMENT SEGMENTATION ✅",
+            "=" * 60,
+            f"Total Segments: {len(segments)}",
+            ""
+        ]
+        
+        for i, segment in enumerate(segments, 1):
+            output_lines.extend([
+                f"📄 SEGMENT {i}",
+                "-" * 60,
+                f"Intent: {segment['dominant_intent']}",
+                f"All Intents: {', '.join(segment['intent_labels'])}",
+                "",
+                f"Content Preview:",
+                segment['raw_text'][:200] + ("..." if len(segment['raw_text']) > 200 else ""),
+                "-" * 60,
+                ""
+            ])
+        
+        output_lines.extend([
+            "=" * 60,
+            "STEP 2: CONTEXT RETRIEVAL ⚠️",
+            "=" * 60,
+            "Status: Not yet implemented",
+            "TODO: Query Pinecone for relevant ADO items and architecture",
+            "",
+            "=" * 60,
+            "STEP 3: BACKLOG GENERATION ⚠️",
+            "=" * 60,
+            "Status: Not yet implemented",
+            "TODO: Generate epics, features, and user stories",
+            "",
+            "=" * 60,
+            "NEXT STEPS",
+            "=" * 60,
+            "1. Implement retrieval_tool.py to query Pinecone",
+            "2. Implement backlog_generation_agent.py to create items",
+            "3. Implement tagging_agent.py to classify stories",
+            "",
+            f"📁 Segmentation output saved to:",
+            f"   {segmentation_result['segments_file']}"
+        ])
+        
+        response_text = "\n".join(output_lines)
+        
+        # Save workflow completion to history
+        save_chat_history(run_id, "assistant", response_text)
+        
+        return {
+            "run_id": run_id,
+            "status": "partial_success",
+            "message": "Segmentation completed, retrieval and generation pending implementation",
+            "response": response_text,
+            "workflow_steps": {
+                "segmentation": {
+                    "status": "completed",
+                    "segments_count": len(segments),
+                    "segments_file": segmentation_result["segments_file"]
+                },
+                "retrieval": {
+                    "status": "not_implemented",
+                    "message": "Retrieval tool pending implementation"
+                },
+                "generation": {
+                    "status": "not_implemented",
+                    "message": "Backlog generation agent pending implementation"
+                }
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        save_chat_history(run_id, "system", f"❌ Workflow failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Workflow failed: {str(e)}")
+
 @app.get("/runs")
 async def list_runs():
     """

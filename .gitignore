@@ -4,3 +4,6 @@ __pycache__/
 .env
 TODO.md
 strands-multi-agent/
+runs/
+agents/__pycache__
+agents/.DS_Store

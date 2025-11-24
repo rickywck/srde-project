@@ -61,7 +61,7 @@ function setupEventListeners() {
     
     // Quick actions
     generateBtn.addEventListener('click', () => {
-        sendQuickMessage("Generate backlog items from this document.");
+        generateBacklogWorkflow();
     });
     
     showBacklogBtn.addEventListener('click', () => {
@@ -334,6 +334,51 @@ async function loadRun(runId) {
     
     // Update runs list highlighting
     await loadRuns();
+}
+
+async function generateBacklogWorkflow() {
+    if (!currentRunId) {
+        addMessage('system', '❌ Please upload a document first.');
+        return;
+    }
+    
+    setBusy(true, 'Running backlog generation workflow...');
+    
+    // Add status message
+    addMessage('system', '🚀 Starting backlog generation workflow...');
+    
+    try {
+        const response = await fetch(`/generate-backlog/${currentRunId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Workflow execution failed');
+        }
+        
+        const data = await response.json();
+        
+        // Add workflow results
+        addMessage('assistant', data.response);
+        
+        // Add status summary
+        const steps = data.workflow_steps;
+        let statusSummary = '\n📊 Workflow Status:\n';
+        statusSummary += `✅ Segmentation: ${steps.segmentation.segments_count} segments created\n`;
+        statusSummary += `⚠️  Retrieval: ${steps.retrieval.status}\n`;
+        statusSummary += `⚠️  Generation: ${steps.generation.status}`;
+        
+        addMessage('system', statusSummary);
+        
+    } catch (error) {
+        console.error('Workflow error:', error);
+        addMessage('system', `❌ Workflow failed: ${error.message}`);
+    } finally {
+        setBusy(false);
+    }
 }
 
 function setBusy(busy, message = 'Ready') {

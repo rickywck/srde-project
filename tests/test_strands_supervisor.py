@@ -4,8 +4,10 @@ Test the Strands-powered Supervisor Agent
 
 import asyncio
 import os
+import pytest
 from supervisor import SupervisorAgent
 
+@pytest.mark.asyncio
 async def test_supervisor():
     """Test the supervisor agent with Strands framework"""
     

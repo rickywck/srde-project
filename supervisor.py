@@ -4,12 +4,21 @@ Orchestrates specialized agents and tools for backlog synthesis workflow
 """
 
 import os
-from typing import Dict, Any, Optional
+import json
+from pathlib import Path
+from typing import Dict, Any, Optional, List
 import yaml
 import base64
 from strands import Agent
 from strands.models.openai import OpenAIModel
 from strands.telemetry import StrandsTelemetry
+
+# Import specialized agents and tools
+from agents.segmentation_agent import create_segmentation_agent
+from agents.backlog_generation_agent import create_backlog_generation_agent
+from agents.tagging_agent import create_tagging_agent
+from tools.retrieval_tool import create_retrieval_tool
+
 
 class SupervisorAgent:
     """
@@ -21,13 +30,14 @@ class SupervisorAgent:
         """Initialize supervisor with configuration"""
         self.config = self._load_config(config_path)
         
-        # Initialize OpenAI client
+        # Initialize OpenAI configuration
         api_key = os.getenv(self.config["openai"]["api_key_env_var"])
         if not api_key:
             raise ValueError(f"OpenAI API key not found in environment variable: {self.config['openai']['api_key_env_var']}")
         
-        # Ensure OpenAI API key is set in environment for Strands
+        # Ensure OpenAI API key is set in environment for Strands and child agents
         os.environ["OPENAI_API_KEY"] = api_key
+        os.environ["OPENAI_CHAT_MODEL"] = self.config["openai"]["chat_model"]
         
         # Configure OpenTelemetry for observability (optional)
         # Uncomment and configure if using Langfuse or other OTEL endpoint
@@ -52,37 +62,31 @@ class SupervisorAgent:
 
 Your role is to:
 1. Analyze incoming user requests about meeting notes and documents
-2. Help users understand their uploaded documents
-3. Guide them through the backlog generation process
-4. Coordinate specialized agents and tools when needed
+2. Coordinate specialized agents and tools to fulfill user requests
+3. Guide users through the backlog synthesis workflow
+4. Orchestrate document segmentation, context retrieval, backlog generation, and tagging
 
-Available capabilities (being implemented in iterations):
-- Segment documents into coherent chunks with intent detection
-- Generate epics, features, and user stories from segments
-- Tag stories relative to existing backlog (new/gap/conflict)
-- Retrieve relevant context from ADO backlog and architecture constraints
-- Write items to Azure DevOps
+Available specialized agents and tools:
+- segment_document: Splits documents into coherent segments with intent detection
+- generate_backlog: Creates epics, features, and user stories from segments (coming soon)
+- tag_story: Tags stories relative to existing backlog as new/gap/conflict (coming soon)
+- retrieve_context: Retrieves relevant ADO items and architecture constraints (coming soon)
 
-Current mode: Intelligent assistant providing guidance and context-aware responses.
-Always be helpful, clear, and focused on the user's needs."""
+Workflow:
+1. User uploads document → Use segment_document tool
+2. For each segment → Use retrieve_context to get relevant existing work
+3. Generate backlog items → Use generate_backlog tool
+4. Tag each story → Use tag_story tool
+5. Optionally write to ADO
+
+Always route requests to the appropriate specialized agent or tool. Be helpful, clear, and focused on completing the user's workflow."""
         
-        # Initialize the Strands agent
-        # Tools will be added in future iterations (segmentation, generation, tagging, retrieval, ADO writer)
-        self.agent = Agent(
-            model=self.model,
-            system_prompt=self.system_prompt,
-            callback_handler=None,
-            tools=[],  # Will add tools in future iterations
-            trace_attributes={
-                "service.name": "backlog-synthesizer",
-                "agent.type": "supervisor",
-                "langfuse.tags": [
-                    "Backlog-Synthesizer-POC",
-                    "Strands-Agent",
-                    "OpenAI"
-                ]
-            }
-        )
+        # Track current run_id for tools
+        self.current_run_id = None
+        
+        # Agent will be initialized per-run with appropriate tools
+        # (similar to teachers_assistant pattern)
+        self.agent = None
     
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load configuration from YAML file"""
@@ -118,6 +122,39 @@ Always be helpful, clear, and focused on the user's needs."""
             Dict with response and status information
         """
         
+        # Update current run_id
+        self.current_run_id = run_id
+        
+        # Create specialized agents and tools for this run
+        # Following the teachers_assistant pattern where each agent/tool is created as needed
+        segmentation_agent = create_segmentation_agent(run_id)
+        backlog_generation_agent = create_backlog_generation_agent(run_id)
+        tagging_agent = create_tagging_agent(run_id)
+        retrieval_tool = create_retrieval_tool(run_id)
+        
+        # Create/update the Strands agent with all specialized agents as tools
+        self.agent = Agent(
+            model=self.model,
+            system_prompt=self.system_prompt,
+            callback_handler=None,
+            tools=[
+                segmentation_agent,
+                backlog_generation_agent,
+                tagging_agent,
+                retrieval_tool
+            ],
+            trace_attributes={
+                "service.name": "backlog-synthesizer",
+                "agent.type": "supervisor",
+                "run.id": run_id,
+                "langfuse.tags": [
+                    "Backlog-Synthesizer-POC",
+                    "Strands-Agent",
+                    "OpenAI"
+                ]
+            }
+        )
+        
         # Build context-aware query for the agent
         query_parts = []
         
@@ -128,6 +165,8 @@ Always be helpful, clear, and focused on the user's needs."""
 --- DOCUMENT START ---
 {document_text[:3000]}{"..." if len(document_text) > 3000 else ""}
 --- DOCUMENT END ---
+
+You have access to a 'segment_document' tool that can split this document into coherent segments with intent detection. Use it when the user asks to analyze, segment, or process the document.
 """
             query_parts.append(context_msg)
         
@@ -155,7 +194,13 @@ Always be helpful, clear, and focused on the user's needs."""
                     "model": self.config["openai"]["chat_model"],
                     "has_document": document_text is not None,
                     "mode": "strands_orchestration",
-                    "framework": "aws_strands"
+                    "framework": "aws_strands",
+                    "agents_available": [
+                        "segment_document",
+                        "generate_backlog",
+                        "tag_story",
+                        "retrieve_context"
+                    ]
                 }
             }
         
@@ -173,12 +218,22 @@ Always be helpful, clear, and focused on the user's needs."""
     async def segment_document(self, run_id: str, document_text: str) -> Dict[str, Any]:
         """
         Segment document into coherent chunks with intent labels.
-        To be implemented in future iteration.
+        This is now implemented as a specialized agent in segmentation_agent.py
+        
+        Args:
+            run_id: Unique identifier for this run
+            document_text: Full text of document to segment
+            
+        Returns:
+            Dict with segmentation results
         """
-        return {
-            "status": "not_implemented",
-            "message": "Document segmentation will be implemented in next iteration"
-        }
+        # Create and invoke segmentation agent directly
+        segmentation_agent = create_segmentation_agent(run_id)
+        result_json = segmentation_agent(document_text)
+        
+        # Parse and return result
+        result = json.loads(result_json)
+        return result
     
     async def generate_backlog(self, run_id: str, segment: Dict[str, Any]) -> Dict[str, Any]:
         """

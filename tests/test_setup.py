@@ -4,47 +4,53 @@ Quick test script to verify the setup
 
 import os
 import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def test_imports():
     """Test that all required packages can be imported"""
     print("Testing imports...")
     
+    success = True
     try:
         import fastapi
         print("✓ FastAPI")
     except ImportError as e:
         print(f"✗ FastAPI: {e}")
-        return False
+        success = False
     
     try:
         import uvicorn
         print("✓ Uvicorn")
     except ImportError as e:
         print(f"✗ Uvicorn: {e}")
-        return False
+        success = False
     
     try:
         import openai
         print("✓ OpenAI")
     except ImportError as e:
         print(f"✗ OpenAI: {e}")
-        return False
+        success = False
     
     try:
         import yaml
         print("✓ PyYAML")
     except ImportError as e:
         print(f"✗ PyYAML: {e}")
-        return False
+        success = False
     
     try:
         from pydantic import BaseModel
         print("✓ Pydantic")
     except ImportError as e:
         print(f"✗ Pydantic: {e}")
-        return False
+        success = False
     
-    return True
+    assert success, "Some imports failed"
+    return success
 
 def test_config():
     """Test configuration file exists and is valid"""
@@ -54,6 +60,7 @@ def test_config():
     
     if not os.path.exists("config.poc.yaml"):
         print("✗ config.poc.yaml not found")
+        assert False, "config.poc.yaml not found"
         return False
     
     try:
@@ -68,11 +75,13 @@ def test_config():
                 print(f"✓ Config has '{key}' section")
             else:
                 print(f"✗ Config missing '{key}' section")
+                assert False, f"Config missing '{key}' section"
                 return False
         
         return True
     except Exception as e:
         print(f"✗ Error loading config: {e}")
+        assert False, f"Error loading config: {e}"
         return False
 
 def test_env():
@@ -99,29 +108,32 @@ def test_env():
     else:
         print("⚠ PINECONE_API_KEY not set (will be needed for future iterations)")
     
-    return openai_key is not None
+    result = openai_key is not None
+    assert result, "OPENAI_API_KEY must be set"
+    return result
 
 def test_directories():
     """Test directory structure"""
     print("\nTesting directories...")
     
-    if os.path.exists("static"):
+    success = True
+    if not os.path.exists("static"):
+        print("✗ static/ directory missing")
+        success = False
+    else:
         print("✓ static/ directory exists")
         
-        if os.path.exists("static/index.html"):
-            print("✓ static/index.html exists")
-        else:
+        if not os.path.exists("static/index.html"):
             print("✗ static/index.html missing")
-            return False
-        
-        if os.path.exists("static/app.js"):
-            print("✓ static/app.js exists")
+            success = False
         else:
+            print("✓ static/index.html exists")
+        
+        if not os.path.exists("static/app.js"):
             print("✗ static/app.js missing")
-            return False
-    else:
-        print("✗ static/ directory missing")
-        return False
+            success = False
+        else:
+            print("✓ static/app.js exists")
     
     # Create runs directory if needed
     if not os.path.exists("runs"):
@@ -130,18 +142,20 @@ def test_directories():
     else:
         print("✓ runs/ directory exists")
     
-    return True
+    assert success, "Directory structure validation failed"
+    return success
 
 def test_modules():
     """Test that custom modules can be imported"""
     print("\nTesting custom modules...")
     
+    success = True
     try:
         from supervisor import SupervisorAgent
         print("✓ Can import SupervisorAgent")
     except ImportError as e:
         print(f"✗ Cannot import SupervisorAgent: {e}")
-        return False
+        success = False
     except Exception as e:
         print(f"⚠ SupervisorAgent import has issues: {e}")
         print("  (This may be okay if env vars aren't set yet)")
@@ -151,12 +165,13 @@ def test_modules():
         print("✓ Can import FastAPI app")
     except ImportError as e:
         print(f"✗ Cannot import app: {e}")
-        return False
+        success = False
     except Exception as e:
         print(f"⚠ App import has issues: {e}")
         print("  (This may be okay if env vars aren't set yet)")
     
-    return True
+    assert success, "Module import failed"
+    return success
 
 def main():
     """Run all tests"""
