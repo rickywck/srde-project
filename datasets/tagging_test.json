@@ -1,0 +1,154 @@
+[
+    {
+        "story_title": "Enable user password reset via email link",
+        "story_description": "Allow users to request a password reset and receive a secure, expiring link via email to set a new password.",
+        "story_acceptance_criteria": [
+            "User can submit email to request reset",
+            "System sends reset link that expires in 30 minutes",
+            "User can set a new password meeting complexity rules"
+        ],
+        "existing_stories": [
+            {
+                "title": "Implement user authentication (login/logout)",
+                "description": "Basic username/password login and logout flow.",
+                "acceptance_criteria": [
+                    "User can log in with valid credentials",
+                    "Invalid credentials produce error message"
+                ]
+            },
+            {
+                "title": "Store user profiles",
+                "description": "Persist basic profile records for registered users.",
+                "acceptance_criteria": [
+                    "Profile contains username and email",
+                    "Profile retrievable after login"
+                ]
+            }
+        ],
+        "gold_tag": "gap",
+        "gold_related_ids": [
+            "Implement user authentication (login/logout)"
+        ]
+    },
+    {
+        "story_title": "Support dark mode theme selection",
+        "story_description": "Provide a toggle allowing users to switch between light and dark color themes; remember preference across sessions.",
+        "story_acceptance_criteria": [
+            "Toggle visible in settings",
+            "Dark theme applies to all primary views",
+            "Preference persists after logout/login"
+        ],
+        "existing_stories": [
+            {
+                "title": "Implement landing page",
+                "description": "Initial marketing landing page.",
+                "acceptance_criteria": [
+                    "Displays hero banner",
+                    "Responsive layout"
+                ]
+            },
+            {
+                "title": "User onboarding wizard",
+                "description": "Guided signup steps for new users.",
+                "acceptance_criteria": [
+                    "Collect email and password",
+                    "Confirm account creation"
+                ]
+            }
+        ],
+        "gold_tag": "new",
+        "gold_related_ids": []
+    },
+    {
+        "story_title": "Enforce strong password complexity (min length 12, symbols required)",
+        "story_description": "Increase password policy to improve security by requiring longer passwords including symbol characters.",
+        "story_acceptance_criteria": [
+            "Minimum length 12",
+            "At least one symbol !@#$%",
+            "At least one digit"
+        ],
+        "existing_stories": [
+            {
+                "title": "Basic password rules (min length 6)",
+                "description": "Initial simple password rule set.",
+                "acceptance_criteria": [
+                    "Minimum length 6",
+                    "No whitespace"
+                ]
+            },
+            {
+                "title": "Account lockout after 5 failures",
+                "description": "Protect against brute force attempts.",
+                "acceptance_criteria": [
+                    "Lock account for 10 minutes after 5 failed logins"
+                ]
+            }
+        ],
+        "gold_tag": "conflict",
+        "gold_related_ids": [
+            "Basic password rules (min length 6)"
+        ]
+    },
+    {
+        "story_title": "Add performance metrics instrumentation",
+        "story_description": "Capture request latency and error rate metrics and expose them to monitoring dashboard.",
+        "story_acceptance_criteria": [
+            "Latency recorded for API endpoints",
+            "Error rate aggregated per service",
+            "Metrics exported to /metrics endpoint"
+        ],
+        "existing_stories": [
+            {
+                "title": "Centralized application logging",
+                "description": "Introduce structured logging across services.",
+                "acceptance_criteria": [
+                    "Logs include correlation id",
+                    "Error stack traces captured"
+                ]
+            },
+            {
+                "title": "Alerting for critical failures",
+                "description": "Send alerts when fatal errors occur.",
+                "acceptance_criteria": [
+                    "On fatal error send alert",
+                    "Alert includes service name"
+                ]
+            }
+        ],
+        "gold_tag": "gap",
+        "gold_related_ids": [
+            "Centralized application logging"
+        ]
+    },
+    {
+        "story_title": "Switch payment processing to Stripe (replace PayPal integration)",
+        "story_description": "Migrate payment gateway from existing PayPal integration to Stripe for expanded feature set.",
+        "story_acceptance_criteria": [
+            "Stripe charges succeed for credit cards",
+            "Existing PayPal buttons removed",
+            "Refunds manageable via Stripe dashboard"
+        ],
+        "existing_stories": [
+            {
+                "title": "Integrate PayPal payments",
+                "description": "Support basic PayPal checkout.",
+                "acceptance_criteria": [
+                    "PayPal button visible on checkout",
+                    "Successful payment updates order status"
+                ]
+            },
+            {
+                "title": "Store order transaction records",
+                "description": "Persist transaction ids and status.",
+                "acceptance_criteria": [
+                    "Record created after payment",
+                    "Status updated after refund"
+                ]
+            }
+        ],
+        "gold_tag": "conflict",
+        "gold_related_ids": [
+            "Integrate PayPal payments"
+        ]
+    }
+]

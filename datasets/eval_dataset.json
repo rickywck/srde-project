@@ -1,0 +1,191 @@
+[
+    {
+        "story_title": "Replace Story 3.4: Entity Recognition and Document Classification with revised approach",
+        "story_description": "Deprecate existing behavior defined in 'Story 3.4: Entity Recognition and Document Classification' and adopt a new incompatible strategy improving security/compliance. Existing implementation will be removed.",
+        "story_acceptance_criteria": [
+            "Legacy behavior removed",
+            "New strategy implemented end-to-end",
+            "Migration notes documented"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 3.4: Entity Recognition and Document Classification",
+                "description": "Uses NLP to extract dates, amounts, merchant names, order numbers, product descriptions, and classifies document types with validation against transaction data.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "conflict",
+        "gold_related_ids": [
+            "Story 3.4: Entity Recognition and Document Classification"
+        ]
+    },
+    {
+        "story_title": "Enhance Story 7.8: Customer Status Dashboard with extended capability",
+        "story_description": "Add missing functionality building on 'Story 7.8: Customer Status Dashboard'. This fills a gap by introducing advanced behavior not present in the current implementation.",
+        "story_acceptance_criteria": [
+            "New: Performance baseline metrics",
+            "New: Extended edge case handling"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 7.8: Customer Status Dashboard",
+                "description": "As a Customer, I want to view my dispute status online so that I can track progress without calling support. Acceptance Criteria: Shows disputes list, current status, visual timeline, milestones/dates, ETA, pending actions. Real-time updates; mobile-responsive; clear status explanations; easy navigation.  Prerequisites: Epic 2 Feature 2.1, Epics 2-5 data Technical Notes: Responsive UI, real-time (WebSockets/polling), timeline component, caching.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "gap",
+        "gold_related_ids": [
+            "Story 7.8: Customer Status Dashboard"
+        ]
+    },
+    {
+        "story_title": "Implement observability hub",
+        "story_description": "Provide a observability hub offering new capability unrelated to current backlog items. Users can access it from main navigation.",
+        "story_acceptance_criteria": [
+            "Accessible via navigation",
+            "Data loads within 2s",
+            "Basic role-based access enforced"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 8.1: Fraud Pattern Detection Models",
+                "description": "Story 8.1: Fraud Pattern Detection Models As a Fraud Analyst, I want AI models detecting fraudulent dispute patterns to prevent losses. Acceptance Criteria: Detect rapid multi-merchant disputes, known fraud patterns, claim/evidence inconsistencies, device/location anomalies, behavioral indicators, organized ring signals. Output fraud probability scores; high-risk flagged; trained on confirmed fraud; minimize false positives.  Prerequisites: Epic 2-3 data, Epic 1 Feature 1.2 Technical Notes: Classification ensemble (GBM/NN); feature engineering (velocity, behavior); real-time scoring; threshold tuning; retraining schedule; store predictions.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "new",
+        "gold_related_ids": []
+    },
+    {
+        "story_title": "Implement analytics dashboard",
+        "story_description": "Provide a analytics dashboard offering new capability unrelated to current backlog items. Users can access it from main navigation.",
+        "story_acceptance_criteria": [
+            "Accessible via navigation",
+            "Data loads within 2s",
+            "Basic role-based access enforced"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 5.6: Customer Notification for Credit Actions",
+                "description": "User Story: As a Customer,I want to be notified when credits are posted or reversed,So that I understand my account activity and dispute status. Acceptance Criteria: Notification triggers on provisional credit issuance, reversal, or permanent conversion. Message includes credit/debit amount and effective transaction date. Reason for action displayed (provisional issuance, case won, case lost, partial outcome). Dispute reference (ID and short description) included. Account balance impact clearly stated (before/after or delta). Next steps or confirmation of final resolution provided. Contact information and support escalation paths included. Customer channel preferences respected (email, SMS, push, in-app). Regulatory disclosure requirements met for Reg E / Reg Z communications. Delivery status recorded; failures retried with backoff and surfaced in ops dashboard.  Prerequisites: Stories 5.4-5.5 (credit operations), Epic 7 Feature 7.1 / 7.2 (notification &amp; personalization platform) Technical Notes: Use centralized notification service; template variables: dispute_id, action_type, amount, reason_code, effective_date, balance_delta. Implement idempotent send (message key = dispute_id + action_type + effective_date). Capture delivery receipts for audit. Provide multi-language support extension point. Include unsubscribe/manage-preference link where channel requires. Log events to analytics for customer comm effectiveness.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "new",
+        "gold_related_ids": []
+    },
+    {
+        "story_title": "Enhance Story 3.3: Document OCR and Text Extraction with extended capability",
+        "story_description": "Add missing functionality building on 'Story 3.3: Document OCR and Text Extraction'. This fills a gap by introducing advanced behavior not present in the current implementation.",
+        "story_acceptance_criteria": [
+            "New: Performance baseline metrics",
+            "New: Extended edge case handling"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 3.3: Document OCR and Text Extraction",
+                "description": "OCR processing extracts text from PDF/image evidence documents using Vertex AI Document AI or Cloud Vision API with multi-page handling and confidence scoring.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "gap",
+        "gold_related_ids": [
+            "Story 3.3: Document OCR and Text Extraction"
+        ]
+    },
+    {
+        "story_title": "Enhance Story 3.8: Intelligent Case Routing and Assignment with extended capability",
+        "story_description": "Add missing functionality building on 'Story 3.8: Intelligent Case Routing and Assignment'. This fills a gap by introducing advanced behavior not present in the current implementation.",
+        "story_acceptance_criteria": [
+            "New: Extended edge case handling",
+            "New: Performance baseline metrics"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 3.8: Intelligent Case Routing and Assignment",
+                "description": "Routes disputes to optimal workflows (auto-approval, standard review, expert queue, fraud investigation) based on validity scores, complexity, and configurable rules with workload balancing.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "gap",
+        "gold_related_ids": [
+            "Story 3.8: Intelligent Case Routing and Assignment"
+        ]
+    },
+    {
+        "story_title": "Replace Story 2.4: AI-Powered Form Field Assistance with revised approach",
+        "story_description": "Deprecate existing behavior defined in 'Story 2.4: AI-Powered Form Field Assistance' and adopt a new incompatible strategy improving security/compliance. Existing implementation will be removed.",
+        "story_acceptance_criteria": [
+            "Legacy behavior removed",
+            "New strategy implemented end-to-end",
+            "Migration notes documented"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 2.4: AI-Powered Form Field Assistance",
+                "description": "Provides context-aware tooltips, auto-population, smart document requests, real-time validation, suggested dispute reasons, and completion progress indicators using AI text analysis and NLP.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "conflict",
+        "gold_related_ids": [
+            "Story 2.4: AI-Powered Form Field Assistance"
+        ]
+    },
+    {
+        "story_title": "Implement analytics dashboard",
+        "story_description": "Provide a analytics dashboard offering new capability unrelated to current backlog items. Users can access it from main navigation.",
+        "story_acceptance_criteria": [
+            "Accessible via navigation",
+            "Data loads within 2s",
+            "Basic role-based access enforced"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 5.5: Timeline Tracking and Automatic Reversal",
+                "description": "User Story: As a System, I want to track provisional credit timelines and reverse when appropriate, so that temporary credits are managed according to case outcomes. Acceptance Criteria: Timeline stores issuance date, amount, investigation deadline Case outcome (won/lost/partial/pending) continuously monitored Automatic reversal trigger for lost cases executes successfully Permanent credit conversion applied for won cases Partial outcomes produce proportional reversal Customer notification 5\u20137 days before scheduled reversal Reversal failures escalated immediately Audit trail captures all reversal attempts &amp; results Success/failure reversal rates tracked SLA compliance for reversal execution monitored  Prerequisites: Story 5.4 (banking integration), Epic 4 Feature 4.3 (case outcomes). Technical Notes: Implement scheduler scanning active provisional credits daily. Use state machine for credit status (temporary, pending-conversion, permanent, reversed). Notifications via unified messaging service. Reversal idempotency key prevents double reversal. Metrics exported for finance reconciliation.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "new",
+        "gold_related_ids": []
+    },
+    {
+        "story_title": "Replace Story 3.7: Outcome Prediction and Complexity Assessment with revised approach",
+        "story_description": "Deprecate existing behavior defined in 'Story 3.7: Outcome Prediction and Complexity Assessment' and adopt a new incompatible strategy improving security/compliance. Existing implementation will be removed.",
+        "story_acceptance_criteria": [
+            "Legacy behavior removed",
+            "New strategy implemented end-to-end",
+            "Migration notes documented"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 3.7: Outcome Prediction and Complexity Assessment",
+                "description": "Predicts outcomes (approve/deny/partial), assesses case complexity, estimates timelines, recommends handling paths, identifies escalation triggers, and required expertise levels.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "conflict",
+        "gold_related_ids": [
+            "Story 3.7: Outcome Prediction and Complexity Assessment"
+        ]
+    },
+    {
+        "story_title": "Implement bulk export tool",
+        "story_description": "Provide a bulk export tool offering new capability unrelated to current backlog items. Users can access it from main navigation.",
+        "story_acceptance_criteria": [
+            "Accessible via navigation",
+            "Data loads within 2s",
+            "Basic role-based access enforced"
+        ],
+        "existing_stories": [
+            {
+                "title": "Story 5.1: Regulatory Compliance Rules Engine",
+                "description": "User Story: As a Compliance Officer, I want provisional credit rules that comply with regulations, so that we meet Reg E and Reg Z requirements automatically. Acceptance Criteria: Reg E (debit): 10-day provisional credit requirement enforced Reg Z (credit): billing dispute timeline rules applied Account type (checking/savings/credit) correctly determined Error vs fraud classification influences rule path Investigation timeline (45 days standard, 90 days exceptions) tracked Reversal conditions defined (lost case, partial outcome adjustments) Rules documented with regulatory references Rule changes version-controlled with effective dates Compliance reports generated (summary &amp; detailed) Exceptions flagged for manual review  Prerequisites: Epic 2 Feature 2.3 (validated disputes), Epic 3 Feature 3.3 (classification signals). Technical Notes: Implement rules engine with auditable execution context. Store regulatory reference codes per rule node. Provide simulation mode for upcoming rule versions. Capture SHER (Source, History, Execution, Result) tuple for each evaluation for regulators.",
+                "acceptance_criteria": []
+            }
+        ],
+        "gold_tag": "new",
+        "gold_related_ids": []
+    }
+]

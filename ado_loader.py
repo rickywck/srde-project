@@ -138,16 +138,27 @@ class ADOBacklogLoader:
     def extract_metadata(self, work_item: Dict[str, Any], embedded_text: Optional[str] = None) -> Dict[str, Any]:
         """
         Extract metadata from work item for Pinecone.
+        Stores original (separated) fields instead of the concatenated embedded text
+        so downstream evaluation datasets can easily reconstruct prompts.
         
         Args:
             work_item: ADO work item dictionary
-            embedded_text: The text that was embedded (for troubleshooting)
+            embedded_text: (deprecated) previously stored truncated embedded text; ignored now
         
         Returns:
-            Metadata dictionary
+            Metadata dictionary with separated fields
         """
         fields = work_item.get("fields", {})
+        # Get original fields (may contain HTML). We strip tags for cleaner downstream usage.
+        import re
+        raw_title = fields.get("System.Title", "")
+        raw_description = fields.get("System.Description", "")
+        raw_acceptance = fields.get("Microsoft.VSTS.Common.AcceptanceCriteria", "")
         
+        # Strip HTML tags (keep original semantics, lose formatting)
+        clean_description = re.sub(r'<[^>]+>', '', raw_description)
+        clean_acceptance = re.sub(r'<[^>]+>', '', raw_acceptance)
+
         metadata = {
             "work_item_id": str(work_item.get("id", "")),
             "work_item_type": fields.get("System.WorkItemType", ""),
@@ -155,13 +166,12 @@ class ADOBacklogLoader:
             "parent_id": str(fields.get("System.Parent", "")),
             "project": self.project,
             "doc_type": "ado_backlog",
-            "title": fields.get("System.Title", "")[:512]  # Pinecone metadata size limit
+            # Keep original title (truncated for safety)
+            "title": raw_title[:512],
+            # Store cleaned description & acceptance criteria separately (truncate conservatively)
+            "description": clean_description[:2000],
+            "acceptance_criteria": clean_acceptance[:2000]
         }
-        
-        # Add embedded text for troubleshooting (truncate if needed)
-        if embedded_text:
-            metadata["embedded_text"] = embedded_text[:1000]  # Store first 1000 chars for troubleshooting
-        
         return metadata
     
     def embed_text(self, text: str) -> List[float]:
@@ -205,7 +215,8 @@ class ADOBacklogLoader:
             
             # Generate embedding
             embedding = self.embed_text(text)
-            metadata = self.extract_metadata(work_item, embedded_text=text)
+            # Build metadata with separated original fields instead of concatenated embedded_text
+            metadata = self.extract_metadata(work_item)
             
             vectors.append({
                 "id": f"ado_{work_item_id}",

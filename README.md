@@ -113,6 +113,36 @@ Tests include:
 - Combined search (both ADO + architecture)
 - Intent-based query construction
 
+### Generate Evaluation Tagging Dataset
+
+Create a synthetic evaluation dataset (same structure as `datasets/tagging_test.json`) using sampled Azure DevOps User Stories and heuristics to label `gap`, `conflict`, or `new`. Uses the shared `config.poc.yaml` (same as `ado_loader.py`). Optional CLI overrides let you change organization/project without editing the config file.
+
+```bash
+export ADO_PAT=your_pat
+python generate_eval_dataset.py \
+  --config config.poc.yaml \
+  --sample-size 20 \
+  --output datasets/eval_dataset.json
+```
+
+Optional overrides / proportions:
+```bash
+python generate_eval_dataset.py --config config.poc.yaml --organization alt-org --project alt-project --gap 0.4 --conflict 0.3
+```
+
+Output fields per entry:
+- `story_title`, `story_description`, `story_acceptance_criteria`
+- `existing_stories` (list of sampled backlog items)
+- `gold_tag` (gap | conflict | new)
+- `gold_related_ids` (titles of related existing stories, empty for new)
+
+Heuristics:
+- gap: enhancement of first existing story
+- conflict: replacement / incompatible change
+- new: unrelated capability
+
+Extend behavior by modifying `synthesize_candidate` or adding LLM calls.
+
 ## Configuration
 
 Edit `config.poc.yaml`:
@@ -134,6 +164,7 @@ openai:
 ├── test_semantic_search.py    # Semantic search tests (section 5.2)
 ├── config.poc.yaml            # Configuration file
 ├── requirements.txt           # Python dependencies
+├── generate_eval_dataset.py   # Evaluation dataset generator (gap/new/conflict)
 ├── .env.example               # Environment variables template
 ├── sample_architecture.md     # Sample architecture constraints document
 └── README.md                  # This file
