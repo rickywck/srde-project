@@ -16,7 +16,6 @@ const tokenInfo = document.getElementById('tokenInfo');
 const runsList = document.getElementById('runsList');
 
 // Quick action buttons
-const analyzeBtn = document.getElementById('analyzeBtn');
 const generateBtn = document.getElementById('generateBtn');
 const showBacklogBtn = document.getElementById('showBacklogBtn');
 const showTaggingBtn = document.getElementById('showTaggingBtn');
@@ -61,10 +60,6 @@ function setupEventListeners() {
     });
     
     // Quick actions
-    analyzeBtn.addEventListener('click', () => {
-        sendQuickMessage("Please analyze this document and tell me what it contains.");
-    });
-    
     generateBtn.addEventListener('click', () => {
         sendQuickMessage("Generate backlog items from this document.");
     });
@@ -108,7 +103,6 @@ async function handleFileUpload(file) {
         runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
         messageInput.disabled = false;
         sendBtn.disabled = false;
-        analyzeBtn.disabled = false;
         generateBtn.disabled = false;
         showBacklogBtn.disabled = false;
         showTaggingBtn.disabled = false;
@@ -330,7 +324,6 @@ async function loadRun(runId) {
     
     messageInput.disabled = false;
     sendBtn.disabled = false;
-    analyzeBtn.disabled = false;
     generateBtn.disabled = false;
     showBacklogBtn.disabled = false;
     showTaggingBtn.disabled = false;

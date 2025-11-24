@@ -6,9 +6,12 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 PyYAML>=6.0
 
+# AWS Strands Agentic Framework
+strands-agents>=1.15.0
+
 # Web framework
-fastapi>=0.104.0
-uvicorn>=0.24.0
+fastapi[standard]>=0.104.0
+#uvicorn>=0.24.0
 python-multipart>=0.0.6
 
 # Document processing
