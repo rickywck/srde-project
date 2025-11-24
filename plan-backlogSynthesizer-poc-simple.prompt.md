@@ -15,7 +15,74 @@ Primary goals for the POC:
 - Persist artifacts on disk for inspection (no UI beyond a basic upload form).
 
 ---
-## 1. Minimal Architecture
+## 1. Multi-Agent Architecture Overview
+
+### 1.1 Architecture Diagram
+
+The system follows a multi-agent architecture where a Supervisor orchestrates specialized agents to process meeting notes and generate backlog items:
+
+```mermaid
+graph TB
+    User[User] -->|Upload document & chat| UI[Chat Interface]
+    UI -->|Instructions| API[FastAPI Backend]
+    
+    API -->|Raw document| Supervisor[Supervisor Agent]
+    
+    Supervisor -->|Document text| SegAgent[Segmentation Agent]
+    SegAgent -->|Segments + intents| Supervisor
+    
+    Supervisor -->|Per segment| Retrieval[Retrieval Tool]
+    Retrieval -->|Query| PineconeADO[("Pinecone: ADO Backlog")]
+    Retrieval -->|Query| PineconeArch[("Pinecone: Architecture")]
+    PineconeADO -->|Relevant items| Retrieval
+    PineconeArch -->|Relevant constraints| Retrieval
+    Retrieval -->|Context| Supervisor
+    
+    Supervisor -->|Segment + context| GenAgent[Backlog Generation Agent]
+    GenAgent -->|Epics/Features/Stories| Supervisor
+    
+    Supervisor -->|Per story| TagAgent[Tagging Agent]
+    TagAgent -->|Query existing stories| PineconeADO
+    PineconeADO -->|Similar stories| TagAgent
+    TagAgent -->|Tag: new/gap/conflict| Supervisor
+    
+    Supervisor -->|Optional: write items| ADOTool[ADO Writer Tool]
+    ADOTool -->|Create items| ADO[Azure DevOps]
+    
+    Supervisor -->|Results| API
+    API -->|Generated backlog| UI
+    UI -->|Display results| User
+    
+    style Supervisor fill:#e1f5ff,stroke:#01579b,stroke-width:3px
+    style SegAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style GenAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style TagAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style ADOTool fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style PineconeADO fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    style PineconeArch fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+```
+
+### 1.2 Agent Roles
+
+- **Supervisor Agent**: Orchestrates the entire workflow, manages state, and decides when to invoke specialized agents or tools.
+- **Segmentation Agent**: Splits documents into coherent segments and identifies intents.
+- **Retrieval Tool**: Tool invoked by Supervisor to search Pinecone for relevant ADO backlog items and architecture constraints.
+- **Backlog Generation Agent**: Creates epics, features, and user stories from segments with retrieved context.
+- **Tagging Agent**: Classifies generated stories relative to existing backlog (new/gap/conflict).
+- **ADO Writer Tool**: Optional tool invoked by Supervisor to persist items to Azure DevOps.
+
+### 1.3 Data Flow
+
+1. User uploads document and provides instructions via chat interface
+2. Supervisor receives document and orchestrates processing
+3. Document is segmented with intent detection
+4. For each segment: retrieve relevant context → generate backlog items
+5. For each story: retrieve similar stories → assign tag
+6. Optionally: Supervisor invokes ADO Writer tool to persist items
+7. Results returned to user via chat interface
+
+---
+## 2. Minimal Architecture Components
 
 Components (kept from full design, simplified behavior):
 - **External Loaders (CLI):**
@@ -33,9 +100,9 @@ Non-goals / out-of-scope for this POC:
 - Custom / fine-grained Langfuse instrumentation (we rely on default Strands traces).
 
 ---
-## 2. External Loaders (Simplified)
+## 3. External Loaders (Simplified)
 
-### 2.1 ADO Backlog Loader
+### 3.1 ADO Backlog Loader
 
 **Purpose:** Load existing Epics/Features/Stories from one ADO project into Pinecone.
 
@@ -48,7 +115,7 @@ Non-goals / out-of-scope for this POC:
   - Upsert into one Pinecone index, namespace = project name.
   - Metadata (minimal): `work_item_id`, `work_item_type`, `state`, `parent_id`, `project`, `doc_type='ado_backlog'`.
 
-### 2.2 Architecture Loader
+### 3.2 Architecture Loader
 
 **Purpose:** Load a **small set** of architecture markdown/PDF/docs into Pinecone.
 
@@ -67,34 +134,59 @@ Non-goals / out-of-scope for this POC:
 No retries, no observability, no JSONL artifacts required for POC (optional to add).
 
 ---
-## 3. Upload & Run API (Minimal)
+## 4. Chat Interface & API (Enhanced)
 
-Implement a small FastAPI app `app.py`:
+Implement a FastAPI app `app.py` with a **chat-based interface** that allows users to interact conversationally with the system:
 
-Endpoints:
+### 4.1 Backend Endpoints
+
 - `POST /upload`:
   - Multipart file upload.
   - Create `run_id` (UUID).
   - Save raw file to `runs/{run_id}/raw.txt`.
   - Return `{ run_id }`.
 
-- `POST /run/{run_id}`:
-  - Reads `runs/{run_id}/raw.txt`.
-  - Invokes **Supervisor pipeline** (segmentation → retrieval+generation → tagging).
-  - Returns a simple status object: `{ run_id, segment_count, story_count }`.
+- `POST /chat/{run_id}`:
+  - Request body: `{ message: string, instruction_type?: string }`.
+  - Processes user instructions via chat (e.g., "Generate backlog items", "Write to ADO", "Show me conflicts").
+  - Invokes **Supervisor Agent** which interprets the instruction and orchestrates appropriate agents/tools.
+  - Returns: `{ run_id, response: string, status: object }`.
 
 - `GET /backlog/{run_id}`:
   - Returns JSON content of `runs/{run_id}/generated_backlog.jsonl` (parsed as list).
 
-For POC, status polling and advanced progress reporting can be skipped or mocked.
+- `GET /tagging/{run_id}`:
+  - Returns JSON content of `runs/{run_id}/tagging.jsonl` (parsed as list).
 
-Front-end:
-- Single HTML page with:
-  - File upload form hitting `/upload`.
-  - A simple "Run" button that calls `/run/{run_id}` and then `/backlog/{run_id}`.
+- `GET /chat-history/{run_id}`:
+  - Returns conversation history for the run.
+
+### 4.2 Front-end: Chat Interface
+
+- Single-page application with:
+  - **File upload area**: Drag-and-drop or button to upload meeting notes/transcripts.
+  - **Chat panel**: 
+    - Message input box for user instructions.
+    - Conversation history display showing user messages and system responses.
+    - Quick action buttons: "Generate Backlog", "Show Tagging Results", "Write to ADO".
+  - **Results panel**: 
+    - Display generated backlog items in expandable cards.
+    - Show tagging results with color-coded tags (new=green, gap=blue, conflict=red).
+    - Filter and search capabilities.
+
+### 4.3 Conversational Capabilities
+
+The chat interface allows users to:
+- Request backlog generation: "Analyze this document and create backlog items"
+- Query results: "Show me all conflict items", "What gaps were identified?"
+- Request modifications: "Regenerate stories for segment 3"
+- Trigger ADO write: "Write the new and gap items to Azure DevOps"
+- Ask for explanations: "Why was story X tagged as conflict?"
+
+The Supervisor Agent interprets these natural language instructions and orchestrates the appropriate workflow.
 
 ---
-## 4. Segmentation Agent (Simplified)
+## 5. Segmentation Agent (Simplified)
 
 **Input:** Full document text.
 
@@ -117,19 +209,19 @@ Front-end:
 - No advanced quality heuristics, merging, or token metrics; only basic segmentation.
 
 ---
-## 5. Per-Segment Retrieval & Generation (Simplified)
+## 6. Per-Segment Retrieval & Generation (Simplified)
 
-The Supervisor runs this for each segment in order.
+The Supervisor invokes the **Retrieval Tool** for each segment before calling the Backlog Generation Agent.
 
-### 5.1 Intent Embedding
+### 6.1 Intent Embedding
 
 For each segment:
 - Build an intent query string: `dominant_intent + ' ' + ' '.join(intent_labels)` plus the first ~300 characters of `raw_text`.
 - Call OpenAI embeddings (`text-embedding-3-small`) to get an intent vector.
 
-### 5.2 Retrieval
+### 6.2 Retrieval Tool Invocation
 
-Using the intent vector, query Pinecone **twice**:
+The Supervisor invokes the Retrieval Tool with the intent vector. The tool queries Pinecone **twice**:
 - ADO items:
   - Namespace = project.
   - Filter: `doc_type='ado_backlog'` (or via separate index if simpler).
@@ -145,7 +237,7 @@ Using the intent vector, query Pinecone **twice**:
 
 For POC, skip complex ranking; just use similarity score returned by Pinecone and apply the threshold filter to keep only relevant results.
 
-### 5.3 Prompt Assembly
+### 6.3 Prompt Assembly
 
 Build a simple prompt template:
 
@@ -154,7 +246,7 @@ Build a simple prompt template:
 - Section 3: Retrieved architecture chunks (short text + identifiers).
 - Section 4: Instructions to generate epics/features/stories + ACs.
 
-### 5.4 Generation Agent Call
+### 6.4 Generation Agent Call
 
 - Single LLM call per segment with the above prompt.
 - Response format: structured JSON list of backlog items with fields:
@@ -174,15 +266,15 @@ POC simplifications:
 - No constraint violation flags or AC delta computation (can be added later).
 
 ---
-## 6. Per-Story Retrieval & Tagging (Simplified)
+## 7. Per-Story Retrieval & Tagging (Simplified)
 
 Once all segments are processed and backlog items are generated:
 
-### 6.1 Story Selection
+### 7.1 Story Selection
 
 - Filter `generated_backlog.jsonl` to only `type == 'Story'`.
 
-### 6.2 Story Embedding & Retrieval
+### 7.2 Story Embedding & Retrieval
 
 For each story:
 - Build story text: `title + '\n' + description + '\n' + '\n'.join(acceptance_criteria)`.
@@ -198,9 +290,9 @@ For each story:
 - If **all** retrieved stories fall below the threshold (i.e., no relevant matches found), automatically tag the story as `"new"` without calling the Tagging Agent LLM.
 - Record this decision in `tagging.jsonl` with `decision_tag="new"`, `related_ids=[]`, and `reason="No similar existing stories found (all below threshold)"`.
 
-### 6.3 Tagging Agent Call
+### 7.3 Tagging Agent Call
 
-**Only called if at least one existing story passes the similarity threshold** (see 6.2).
+**Only called if at least one existing story passes the similarity threshold** (see 7.2).
 
 Prompt includes:
 - Generated story (title, description, ACs).
@@ -217,29 +309,65 @@ Supervisor:
 - Also updates in-memory backlog items with `assigned_tag`.
 
 POC simplifications:
-- Threshold filtering happens before LLM call (see 6.2 early exit).
+- Threshold filtering happens before LLM call (see 7.2 early exit).
 - LLM only reasons over stories that are sufficiently similar.
 - Only three tag values: `new` (no similar stories), `gap` (fills a gap or extends existing work), `conflict` (contradicts existing stories).
 
-The tagging output produced here is the main input to the simple evaluation in Section 8.
+The tagging output produced here is the main input to the simple evaluation in Section 9.
 
 ---
-## 7. Optional ADO Write (POC)
+## 8. ADO Writer Tool (Supervisor-Invoked)
 
-This step can be **skipped** initially; if included, keep it minimal:
+The ADO Writer is implemented as a **tool** that the Supervisor Agent can optionally invoke based on user instructions via chat.
 
-- CLI script `ado_writer.py` with one command:
-  - Reads `runs/{run_id}/generated_backlog.jsonl` and `tagging.jsonl`.
-  - For each item with `assigned_tag` in `{ "new", "gap" }`:
-    - For POC, **only create new ADO items** (Epics/Features/Stories) with parent relationships.
-  - No PATCH/modify of existing items; no idempotency hashing, no retries.
+### 8.1 Tool Interface
+
+**Tool Name**: `write_to_ado`
+
+**Input Parameters**:
+- `run_id`: The run identifier to read generated backlog from.
+- `filter_tags`: List of tags to include (default: `["new", "gap"]`).
+- `dry_run`: Boolean flag for preview mode (default: `false`).
+
+**Output**:
+- `created_items`: List of created ADO work item IDs.
+- `summary`: Object with counts of created epics/features/stories.
+- `errors`: List of any errors encountered.
+
+### 8.2 Implementation
+
+Implemented in `ado_writer_tool.py`:
+
+**Behavior**:
+1. Reads `runs/{run_id}/generated_backlog.jsonl` and `tagging.jsonl`.
+2. Filters items based on `filter_tags` (default includes only items tagged as `new` or `gap`).
+3. For each filtered item:
+   - Creates new ADO work items (Epics/Features/Stories) via REST API.
+   - Maintains parent-child relationships.
+   - Tracks created item IDs.
+4. Returns structured result with created item IDs and summary.
+
+**POC Limitations**:
+- **Only creates new items** (no PATCH/modify of existing items).
+- No idempotency hashing or duplicate detection.
+- No advanced retry logic beyond basic SDK retries.
+- Items tagged as `conflict` are excluded by default (require manual review).
+
+### 8.3 Supervisor Integration
+
+The Supervisor Agent can invoke this tool when:
+- User explicitly requests: "Write to ADO", "Create these items in Azure DevOps".
+- User asks for dry-run preview: "Show me what would be created in ADO".
+- As part of an automated workflow if configured.
+
+The tool invocation is logged and results are displayed in the chat interface.
 
 ---
-## 8. Minimal Evaluation
+## 9. Minimal Evaluation
 
 For the POC, we add a **lightweight tagging evaluation** step to check whether the Tagging Agent is behaving sensibly on a small labeled dataset.
 
-### 8.1 Tagging Test Dataset
+### 9.1 Tagging Test Dataset
 
 - Store a simple JSONL file at `datasets/tagging_test.jsonl` with records:
   - **Generated story (the one being tagged):**
@@ -252,7 +380,7 @@ For the POC, we add a **lightweight tagging evaluation** step to check whether t
     - `gold_tag` (`"new" | "gap" | "conflict"`)
     - `gold_related_ids` (optional list of identifiers or titles the human labeler considered when deciding the tag)
 
-### 8.2 Evaluation Script
+### 9.2 Evaluation Script
 
 - CLI script `evaluate_tagging.py`:
   1. Loads `datasets/tagging_test.jsonl`.
@@ -269,7 +397,7 @@ This approach ensures the evaluation is **reproducible** (same existing stories 
 This keeps evaluation implementation minimal but still provides a concrete quality signal for the tagging behavior.
 
 ---
-## 9. Minimal Configuration
+## 10. Minimal Configuration
 
 For the POC, use a single simple configuration file `config.poc.yaml`:
 
@@ -299,7 +427,7 @@ project:
 No per-feature toggles, no thresholds configuration. Any extra knobs (e.g. `top_k`) can be hard-coded constants in code for this POC.
 
 ---
-## 10. POC Success Criteria
+## 11. POC Success Criteria
 
 The POC is considered successful if we can:
 - Run loaders once to populate Pinecone with **real** ADO backlog and a small architecture corpus.
