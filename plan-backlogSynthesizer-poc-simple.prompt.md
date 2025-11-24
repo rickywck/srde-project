@@ -315,6 +315,55 @@ POC simplifications:
 
 The tagging output produced here is the main input to the simple evaluation in Section 9.
 
+### 7.4 Direct Dataset Tagging Mode (Evaluation Feed)
+
+To support reproducible tagging evaluation (F1 metrics) without relying on live Pinecone retrieval, the Tagging Agent can run in a **direct dataset mode**. In this mode, the Supervisor supplies a predefined snapshot of existing stories along with a generated story, bypassing embedding-based similarity filtering and retrieval.
+
+#### 7.4.1 Purpose
+Enable deterministic tagging on a curated evaluation dataset (see Section 9.1) so predictions can be directly compared with gold labels to compute precision/recall/F1.
+
+#### 7.4.2 Input Record Schema (JSONL)
+Each evaluation record provided to the Supervisor (e.g. from `datasets/tagging_test.jsonl`) contains:
+- `story_title`
+- `story_description`
+- `story_acceptance_criteria` (list[str])
+- `existing_stories` (list of objects):
+  - `title`
+  - `description`
+  - `acceptance_criteria` (list[str])
+  - Optional: `work_item_id`
+- `gold_tag` (for evaluation only; not passed to Tagging Agent)
+- Optional: `gold_related_ids`
+
+#### 7.4.3 Supervisor Invocation Flow
+1. Load evaluation record.
+2. Construct tagging prompt directly from:
+  - Generated story fields
+  - Provided `existing_stories` list (treated as the retrieved context)
+3. Skip retrieval & similarity threshold logic (Sections 7.2 early exit rules not applied).
+4. Call Tagging Agent once per record.
+5. Capture Tagging Agent output:
+  - `decision_tag`
+  - `related_ids` (if any)
+  - `reason` (optional explanatory text)
+6. Write prediction to `eval/tagging_predictions.jsonl` with fields:
+  - `story_title`, `decision_tag`, `related_ids`, `reason`, `gold_tag` (copied from dataset for downstream metric computation).
+
+#### 7.4.4 Differences vs Standard Mode
+- No embedding/vector similarity filtering.
+- Entire `existing_stories` snapshot is given verbatim to the Tagging Agent.
+- Guarantees consistent inputs across runs → stable evaluation metrics.
+- Still uses identical prompt structure & decision taxonomy (`new | gap | conflict`).
+
+#### 7.4.5 Optional Enhancements (Future)
+- Add a lightweight consistency check comparing direct-mode tag vs pipeline-mode tag for the same story.
+- Include a confidence score (LLM self-assessment) to analyze correlation with errors.
+
+#### 7.4.6 Integration With Evaluation (Section 9)
+The file `eval/tagging_predictions.jsonl` is consumed by the tagging evaluation script to compute TP/FP/FN without re-running the agent. If predictions file exists, the evaluation script may skip live inference for faster iterative metric calculation.
+
+This mode ensures clear isolation of **model reasoning quality** from **retrieval quality**, allowing targeted improvements.
+
 ---
 ## 8. ADO Writer Tool (Supervisor-Invoked)
 
@@ -438,14 +487,10 @@ This evaluates the overall quality and effectiveness of generated backlog items 
      - Do the items align with retrieved architecture constraints?
      - Are there conflicts with existing ADO backlog items?
      
-     **Quality (1-5):**
+    **Quality (1-5):**
      - Are titles clear and concise?
      - Are descriptions detailed and actionable?
      - Are acceptance criteria specific and testable?
-     
-     **Hierarchy (1-5):**
-     - Is the Epic → Feature → Story hierarchy logical?
-     - Are parent-child relationships appropriate?
      
   4. Judge LLM returns structured JSON:
      ```json
@@ -454,8 +499,7 @@ This evaluates the overall quality and effectiveness of generated backlog items 
        "relevance": {"score": 5, "reasoning": "..."},
        "consistency": {"score": 3, "reasoning": "..."},
        "quality": {"score": 4, "reasoning": "..."},
-       "hierarchy": {"score": 5, "reasoning": "..."},
-       "overall_score": 4.2,
+       "overall_score": 4.0,
        "summary": "The generated backlog effectively captures...",
        "suggestions": ["Consider adding...", "Clarify..."]
      }
@@ -493,7 +537,6 @@ Rate the generated backlog on the following dimensions (1-5 scale):
 2. Relevance: Are items relevant without hallucinations?
 3. Consistency: Does it align with architecture and existing items?
 4. Quality: Are titles, descriptions, and ACs well-written?
-5. Hierarchy: Is the Epic/Feature/Story structure logical?
 
 Provide scores, reasoning, and actionable suggestions for improvement.
 ```
