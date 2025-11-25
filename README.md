@@ -1,23 +1,35 @@
-# Backlog Synthesizer POC
+# Requirements Document Elaboration (RDE) System
 
-A Python implementation of the Backlog Synthesizer POC that loads Azure DevOps backlog items and architecture constraints into a vector database for semantic search and backlog generation.
+An intelligent multi-agent system that transforms high-level requirements documents into detailed, actionable Azure DevOps backlog items using AI-powered analysis and generation.
 
 ## Overview
 
-This POC implements sections 2.1, 2.2, and 5.2 of the Backlog Synthesizer POC plan:
+The RDE system uses a supervisor-coordinated multi-agent architecture to:
 
-1. **ADO Backlog Loader (2.1)**: Loads Epics, Features, and User Stories from Azure DevOps into Pinecone
-2. **Architecture Loader (2.2)**: Loads architecture constraint documents (MD, DOCX, PDF) into Pinecone with smart chunking
-3. **Semantic Search Tests (5.2)**: Tests retrieval of relevant items based on intent embeddings and similarity thresholds
+1. **Segment requirements documents** into logical sections with semantic intent detection
+2. **Generate structured backlog items** (Epics, Features, Stories) with context-aware RAG
+3. **Tag and classify stories** against existing backlog (gap/conflict/new)
+4. **Evaluate output quality** using LLM-as-judge methodology
+5. **Provide interactive chat interface** for iterative refinement
 
-## Features
+## Architecture
 
-- Azure DevOps REST API integration for backlog retrieval
-- Smart document chunking using RecursiveTokenChunker
-- OpenAI embeddings (text-embedding-3-small)
-- Pinecone vector database storage
-- Similarity threshold filtering (default: 0.7)
-- Comprehensive test suite
+### Multi-Agent System
+
+- **Supervisor Agent**: Orchestrates workflow and routes user requests to specialized agents
+- **Segmentation Agent**: Analyzes documents and breaks them into semantic sections with intent labels
+- **Backlog Generation Agent**: Creates Epics/Features/Stories from segments using RAG retrieval
+- **Tagging Agent**: Classifies stories as gap/conflict/new relative to existing backlog
+- **Evaluation Agent**: Assesses completeness, relevance, and quality of generated backlog
+
+### Technology Stack
+
+- **Framework**: AWS Strands for multi-agent orchestration
+- **Backend**: FastAPI with async support
+- **LLM**: OpenAI GPT-4o for reasoning, text-embedding-3-small for embeddings
+- **Vector Store**: Pinecone (serverless, 512-dim embeddings)
+- **Frontend**: HTML/CSS/JavaScript chat interface
+- **Prompt Management**: YAML-based external configuration with centralized loader
 
 ## Prerequisites
 
@@ -55,93 +67,109 @@ project:
   name: your-project
 ```
 
-## Usage
+## Quick Start
 
-### Load ADO Backlog
-
-Load Epics, Features, and User Stories from Azure DevOps into Pinecone:
+### 1. Setup Environment
 
 ```bash
-python ado_loader.py --organization your-org --project your-project
-```
+# Install dependencies
+pip install -r requirements.txt
 
-This will:
-- Fetch all Epic, Feature, and User Story work items
-- Extract title, description, and acceptance criteria
-- Generate embeddings using OpenAI
-- Store in Pinecone with metadata (work_item_id, work_item_type, state, parent_id, etc.)
+# Create .env file with your credentials
+cat > .env << EOF
+ADO_PAT=your_ado_personal_access_token
+PINECONE_API_KEY=your_pinecone_api_key
+OPENAI_API_KEY=your_openai_api_key
+EOF
 
-### Load Architecture Documents
-
-Load architecture constraint documents into Pinecone:
-
-```bash
-python arch_loader.py --project your-project --path ./docs/architecture
-```
-
-Supported formats:
-- Markdown (.md)
-- Microsoft Word (.docx)
-- PDF (.pdf)
-
-This will:
-- Recursively find all supported documents in the directory
-- Chunk documents intelligently (default: 1000 chars with 200 char overlap)
-- Generate embeddings for each chunk
-- Store in Pinecone with metadata (file_name, chunk_index, etc.)
-
-Options:
-- `--chunk-size`: Chunk size in characters (default: 1000)
-- `--chunk-overlap`: Overlap between chunks (default: 200)
-
-### Run Semantic Search Tests
-
-Test retrieval functionality:
-
-```bash
-# Run with pytest
-pytest test_semantic_search.py -v
-
-# Or run manual test
-python test_semantic_search.py
-```
-
-Tests include:
-- Text embedding generation
-- ADO item search with similarity threshold
-- Architecture constraint search
-- Combined search (both ADO + architecture)
-- Intent-based query construction
-
-### Generate Evaluation Tagging Dataset
-
-Create a synthetic evaluation dataset (same structure as `datasets/tagging_test.json`) using sampled Azure DevOps User Stories and heuristics to label `gap`, `conflict`, or `new`. Uses the shared `config.poc.yaml` (same as `ado_loader.py`). Optional CLI overrides let you change organization/project without editing the config file.
-
-```bash
+# Export environment variables (if not using .env file)
 export ADO_PAT=your_pat
-python generate_eval_dataset.py \
-  --config config.poc.yaml \
-  --sample-size 20 \
-  --output datasets/eval_dataset.json
+export PINECONE_API_KEY=your_key
+export OPENAI_API_KEY=your_key
 ```
 
-Optional overrides / proportions:
+### 2. Configure Project
+
+Edit `config.poc.yaml` with your project details:
+
+```yaml
+ado:
+  organization: your-org
+  project: your-project
+
+project:
+  name: your-project  # Used as Pinecone namespace
+```
+
+### 3. Load Data (One-time Setup)
+
 ```bash
-python generate_eval_dataset.py --config config.poc.yaml --organization alt-org --project alt-project --gap 0.4 --conflict 0.3
+# Load existing ADO backlog items
+python ingestion/ado_loader.py
+
+# Load architecture constraint documents
+python ingestion/arch_loader.py --path ~/path/to/architecture/docs
 ```
 
-Output fields per entry:
-- `story_title`, `story_description`, `story_acceptance_criteria`
-- `existing_stories` (list of sampled backlog items)
-- `gold_tag` (gap | conflict | new)
-- `gold_related_ids` (titles of related existing stories, empty for new)
+### 4. Start the Application
 
-Heuristics:
-- gap: enhancement of first existing story
-- conflict: replacement / incompatible change
-- new: unrelated capability
+```bash
+# Activate your environment (if using conda)
+conda activate strands
 
-Extend behavior by modifying `synthesize_candidate` or adding LLM calls.
+# Start the FastAPI server
+python app.py
+```
+
+The application will be available at `http://localhost:8000`
+
+### 5. Use the Chat Interface
+
+Open your browser to `http://localhost:8000` and interact with the system:
+
+- Upload requirements documents for analysis
+- Ask questions about segmentation results
+- Request backlog generation for specific segments
+- Review tagging and classification results
+- Request evaluation of generated backlog items
+
+## Usage Examples
+
+### Process a Requirements Document
+
+```
+User: "Analyze the requirements in dispute-resolution-architecture-overview.md"
+System: [Segments document, identifies intents, provides summary]
+
+User: "Generate backlog items for the workflow management section"
+System: [Creates Epics/Features/Stories with RAG-enhanced context]
+
+User: "Tag these stories against existing backlog"
+System: [Classifies as gap/conflict/new with justifications]
+
+User: "Evaluate the quality of generated items"
+System: [Provides completeness, relevance, and quality scores]
+```
+
+### Data Ingestion
+
+```bash
+# Load ADO backlog with custom config
+python ingestion/ado_loader.py --config custom_config.yaml
+
+# Load architecture docs with custom chunking
+python ingestion/arch_loader.py --path ./docs --chunk-size 1500 --chunk-overlap 300
+```
+
+### Evaluation
+
+```bash
+# Generate synthetic evaluation dataset
+python evaluate/generate_eval_dataset.py --sample-size 50 --output datasets/eval_dataset.json
+
+# Run tagging evaluation
+python evaluate/evaluate_tagging.py --dataset datasets/tagging_test.json --threshold 0.6
+```
 
 ## Configuration
 
@@ -159,84 +187,183 @@ openai:
 
 ```
 .
-├── ado_loader.py              # ADO Backlog Loader (section 2.1)
-├── arch_loader.py             # Architecture Loader (section 2.2)
-├── test_semantic_search.py    # Semantic search tests (section 5.2)
-├── config.poc.yaml            # Configuration file
+├── agents/                    # Specialized AI agents
+│   ├── segmentation_agent.py       # Document segmentation with intent detection
+│   ├── backlog_generation_agent.py # Backlog item generation with RAG
+│   ├── tagging_agent.py            # Story classification (gap/conflict/new)
+│   ├── evaluation_agent.py         # Quality assessment (LLM-as-judge)
+│   └── prompt_loader.py            # Centralized prompt management utility
+├── prompts/                   # External YAML prompt configurations
+│   ├── segmentation_agent.yaml
+│   ├── backlog_generation_agent.yaml
+│   ├── tagging_agent.yaml
+│   ├── evaluation_agent.yaml
+│   └── supervisor_agent.yaml
+├── ingestion/                 # Data loading utilities
+│   ├── ado_loader.py              # Load ADO backlog into Pinecone
+│   └── arch_loader.py             # Load architecture docs into Pinecone
+├── evaluate/                  # Evaluation framework
+│   ├── evaluate_tagging.py        # Tagging agent evaluation
+│   └── generate_eval_dataset.py   # Synthetic dataset generation
+├── tests/                     # Test suite
+│   └── test_supervisor_integration.py
+├── static/                    # Frontend assets (chat interface)
+├── runs/                      # Session state storage (git-ignored)
+├── docs/                      # Documentation
+│   ├── archive/                   # Development notes (archived)
+│   └── ...
+├── app.py                     # FastAPI application entry point
+├── supervisor.py              # Supervisor agent orchestration
+├── chunker.py                 # Document chunking utility
+├── config.poc.yaml            # System configuration
 ├── requirements.txt           # Python dependencies
-├── generate_eval_dataset.py   # Evaluation dataset generator (gap/new/conflict)
-├── .env.example               # Environment variables template
-├── sample_architecture.md     # Sample architecture constraints document
 └── README.md                  # This file
 ```
 
 ## How It Works
 
-### ADO Loader
+### Supervisor Orchestration
 
-1. Connects to Azure DevOps using REST API with PAT authentication
-2. Queries for Epic, Feature, and User Story work items using WIQL
-3. Fetches full work item details including relationships
-4. Combines title + description + acceptance criteria into single text
-5. Generates embeddings using OpenAI text-embedding-3-small
-6. Stores vectors in Pinecone with metadata for filtering
+The supervisor agent coordinates all specialized agents using AWS Strands framework:
 
-### Architecture Loader
+1. User submits request via chat interface (`/chat/{run_id}` endpoint)
+2. Supervisor analyzes intent and determines which agent(s) to invoke
+3. Agents are executed with appropriate context and prompts
+4. Results are aggregated and returned to user
+5. Session state persisted in `runs/{run_id}/` directory
 
-1. Scans directory for supported document types (.md, .docx, .pdf)
-2. Extracts text content from each document
-3. Chunks text using RecursiveTokenChunker with semantic separators
-4. Generates embeddings for each chunk
-5. Stores vectors in Pinecone with chunk metadata
+### Document Segmentation
 
-### Semantic Search
+1. User uploads requirements document or provides text
+2. Segmentation agent analyzes structure and content
+3. Document split into logical sections with:
+   - Section number, title, and text
+   - Semantic intent labels (functional, non-functional, technical, business)
+   - Dominant intent classification
+   - Rationale for segmentation decisions
 
-1. Builds intent query from dominant intent + labels + segment text
-2. Generates query embedding
-3. Searches Pinecone separately for:
-   - ADO items (filtered by doc_type='ado_backlog')
-   - Architecture constraints (filtered by doc_type='architecture')
-4. Applies similarity threshold (default: 0.7) to filter results
-5. Returns only relevant matches above threshold
+### Backlog Generation (RAG-Enhanced)
 
-## Example: Sample Architecture Document
+1. Takes segmented sections from segmentation agent
+2. Uses RAG to retrieve relevant context:
+   - Existing ADO backlog items (Pinecone similarity search)
+   - Architecture constraints (filtered by intent)
+3. Generates hierarchical backlog:
+   - Epics (high-level themes)
+   - Features (functional capabilities)
+   - User Stories (actionable work items with acceptance criteria)
+4. Embeds traceability and context from source document
 
-A sample architecture constraints document is provided in `sample_architecture.md`. Load it with:
+### Tagging & Classification
 
-```bash
-python arch_loader.py --project your-project --path .
-```
+1. Analyzes generated stories against existing backlog
+2. Performs similarity search to find related items
+3. Classifies each story as:
+   - **gap**: Extends/enhances existing functionality
+   - **conflict**: Contradicts/replaces existing items
+   - **new**: Introduces novel capability
+4. Provides justification and related item references
 
-Then test retrieval:
+### Quality Evaluation (LLM-as-Judge)
 
-```bash
-python test_semantic_search.py
+1. Evaluates generated backlog on three dimensions:
+   - **Completeness**: Coverage of requirements (0-10)
+   - **Relevance**: Alignment with context (0-10)
+   - **Quality**: Clarity and actionability (0-10)
+2. Provides overall score and improvement suggestions
+3. Uses structured JSON schema for consistent assessment
+
+## Key Features
+
+### External Prompt Management
+- All agent prompts stored in YAML configuration files (`prompts/`)
+- Centralized `prompt_loader.py` utility with LRU caching
+- Easy prompt tuning without code changes
+- Template variable substitution via `str.format()`
+
+### RAG-Enhanced Generation
+- Pinecone vector store for semantic search
+- Separate namespaces for ADO items and architecture constraints
+- Configurable similarity thresholds
+- Intent-based filtering for relevant context
+
+### Session Management
+- Each chat session gets unique `run_id`
+- State persisted in `runs/{run_id}/` directory
+- Supports iterative refinement and follow-up questions
+
+### Evaluation Framework
+- Synthetic dataset generation for tagging validation
+- Automated evaluation of tagging accuracy
+- LLM-as-judge for backlog quality assessment
+
+## Configuration
+
+Edit `config.poc.yaml` to customize behavior:
+
+```yaml
+# Azure DevOps settings
+ado:
+  organization: your-org
+  project: your-project
+  pat_env_var: ADO_PAT
+
+# Vector database settings
+pinecone:
+  api_key_env_var: PINECONE_API_KEY
+  index_name: your-index
+  environment: us-east-1
+
+# OpenAI settings
+openai:
+  api_key_env_var: OPENAI_API_KEY
+  embedding_model: text-embedding-3-small
+  chat_model: gpt-4o
+
+# Retrieval settings
+retrieval:
+  min_similarity_threshold: 0.5
+
+# Project settings (used as Pinecone namespace)
+project:
+  name: your-project
 ```
 
 ## Troubleshooting
 
-### API Keys Not Found
-Ensure your `.env` file is in the project root and contains all required keys.
+### Environment Variables Not Found
+- Create `.env` file in project root with required credentials
+- Or export variables in your shell: `export ADO_PAT=your_token`
+- Ensure variables are exported (not just set): `export -p | grep ADO_PAT`
 
-### No Results from Search
-- Check that data has been loaded (run loaders first)
-- Try lowering the similarity threshold in `config.poc.yaml`
-- Verify your project name matches in both config and namespace
+### Loader Scripts Fail to Import
+- Loaders moved to `ingestion/` directory
+- Scripts automatically resolve paths to parent directory for config and modules
+- Run from project root: `python ingestion/ado_loader.py`
 
-### Import Errors
-Install all dependencies: `pip install -r requirements.txt`
+### No Results from RAG Search
+- Verify data loaded: Check Pinecone dashboard for vectors
+- Lower similarity threshold in `config.poc.yaml`
+- Ensure namespace matches `project.name` in config
 
-Note: The lint errors for imports are expected until dependencies are installed.
+### Chat Interface Not Loading
+- Check FastAPI is running on `http://localhost:8000`
+- Verify static files in `static/` directory
+- Check browser console for JavaScript errors
 
-## Next Steps
+### Agent Errors
+- Verify all prompts exist in `prompts/` directory
+- Check YAML syntax (indentation, structure)
+- Review agent logs in terminal output
 
-This POC implements the foundation for the full Backlog Synthesizer pipeline. Future enhancements include:
+## Development Notes
 
-- Segmentation Agent (section 4)
-- Backlog Generation Agent (section 5.3-5.4)
-- Tagging Agent (section 6)
-- Upload & Run API (section 3)
-- Evaluation framework (section 8)
+Development documentation archived in `docs/archive/`:
+- `PROMPT_EXTERNALIZATION.md` - Prompt refactoring details
+- `SUPERVISOR_INTEGRATION.md` - Supervisor agent implementation
+- `STRANDS_UPGRADE.md` - AWS Strands migration notes
+- `WORKFLOW_IMPLEMENTATION.md` - Multi-agent workflow design
+- And more...
 
 ## License
 
