@@ -116,7 +116,16 @@ async def upload_document(file: UploadFile = File(...)):
 @app.post("/chat/{run_id}", response_model=ChatResponse)
 async def chat(run_id: str, message: ChatMessage):
     """
-    Send a chat message and get response from supervisor agent
+    Send a chat message and get response from supervisor agent.
+    
+    The supervisor agent orchestrates all specialized tools:
+    - segment_document: Document segmentation with intent detection
+    - generate_backlog: Backlog item generation from segments
+    - tag_story: Story classification (new/gap/conflict)
+    - retrieve_context: Retrieval of relevant ADO items and constraints
+    - evaluate_backlog_quality: LLM-as-judge quality evaluation
+    
+    The supervisor uses Strands Agent to decide which tools to invoke based on user message.
     """
     try:
         run_dir = get_run_dir(run_id)

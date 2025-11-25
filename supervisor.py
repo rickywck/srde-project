@@ -69,9 +69,10 @@ Your role is to:
 
 Available specialized agents and tools:
 - segment_document: Splits documents into coherent segments with intent detection
-- generate_backlog: Creates epics, features, and user stories from segments (coming soon)
-- tag_story: Tags stories relative to existing backlog as new/gap/conflict (coming soon)
-- retrieve_context: Retrieves relevant ADO items and architecture constraints (coming soon)
+- generate_backlog: Creates epics, features, and user stories from segments
+- tag_story: Tags stories relative to existing backlog as new/gap/conflict
+- retrieve_context: Retrieves relevant ADO items and architecture constraints
+- evaluate_backlog_quality: Evaluates the quality of generated backlog items
 
 Workflow:
 1. User uploads document → Use segment_document tool
@@ -204,7 +205,8 @@ You have access to a 'segment_document' tool that can split this document into c
                         "tag_story",
                         "retrieve_context",
                         "evaluate_backlog_quality"
-                    ]
+                    ],
+                    "tools_invoked": getattr(response, 'tool_calls', []) if hasattr(response, 'tool_calls') else []
                 }
             }
         
