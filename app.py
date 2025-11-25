@@ -25,6 +25,7 @@ load_dotenv()
 from supervisor import SupervisorAgent
 from workflows import BacklogSynthesisWorkflow, StrandsBacklogWorkflow
 from tools.ado_writer_tool import create_ado_writer_tool
+from tools.file_extractor import FileExtractor
 
 app = FastAPI(title="Backlog Synthesizer POC")
 
@@ -90,18 +91,29 @@ async def root():
 async def upload_document(file: UploadFile = File(...)):
     """
     Upload a document (meeting notes/transcript) to start a new run
+    Supports .txt, .md, .docx, .pdf formats
     """
     try:
         # Generate unique run ID
         run_id = str(uuid.uuid4())
         run_dir = get_run_dir(run_id)
         
-        # Save uploaded file
+        # Read uploaded file
         content = await file.read()
-        raw_file = run_dir / "raw.txt"
         
-        with open(raw_file, "wb") as f:
-            f.write(content)
+        # Extract text from file using FileExtractor
+        try:
+            text = FileExtractor.extract_text(content, file.filename)
+        except Exception as extract_error:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Failed to extract text from file: {str(extract_error)}"
+            )
+        
+        # Save extracted text to raw.txt
+        raw_file = run_dir / "raw.txt"
+        with open(raw_file, "w", encoding="utf-8") as f:
+            f.write(text)
         
         # Initialize chat history
         save_chat_history(run_id, "system", f"Document uploaded: {file.filename}")
@@ -112,6 +124,8 @@ async def upload_document(file: UploadFile = File(...)):
             message=f"Document uploaded successfully. Use run_id: {run_id} to interact."
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
@@ -123,26 +137,16 @@ async def extract_text(file: UploadFile = File(...)):
     """
     try:
         content = await file.read()
-        text = ""
         
-        if file.filename.endswith('.txt') or file.filename.endswith('.md'):
-            text = content.decode('utf-8')
-        elif file.filename.endswith('.docx'):
-            from docx import Document
-            from io import BytesIO
-            doc = Document(BytesIO(content))
-            text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-        elif file.filename.endswith('.pdf'):
-            from PyPDF2 import PdfReader
-            from io import BytesIO
-            pdf = PdfReader(BytesIO(content))
-            text = '\n'.join([page.extract_text() for page in pdf.pages])
-        else:
-            # Try to decode as text for other formats
-            text = content.decode('utf-8')
+        # Use FileExtractor to extract text
+        text = FileExtractor.extract_text(content, file.filename)
         
         return {"text": text, "filename": file.filename}
     
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
 
