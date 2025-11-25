@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ADO Export UI Preview</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .preview-box {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #667eea;
+            margin-top: 0;
+        }
+        pre {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+        a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .label {
+            background: #e8f5e9;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 ADO Export UI Preview</h1>
+    <p>This shows how the ADO export results will be displayed in the updated UI.</p>
+
+    <div class="preview-box">
+        <h2>1. Dry Run Preview (Before Export)</h2>
+        <span class="label">Preview Mode</span>
+        <pre>🧾 <strong>ADO Export Preview</strong>
+
+<strong>What will be created:</strong>
+  📦 Epics: 1
+  🎯 Features: 2
+  📝 User Stories: 2
+
+<strong>Target:</strong> rickywck/rde-lab
+<strong>Filter:</strong> new, gap
+<strong>Status:</strong> ✅ Ready to export</pre>
+    </div>
+
+    <div class="preview-box">
+        <h2>2. Successful Export Result</h2>
+        <span class="label" style="background:#e3f2fd;">Write Mode</span>
+        <pre>🚀 <strong>ADO Export Complete!</strong>
+
+<strong>Created 5 work items:</strong>
+
+📦 <strong>Epics (1):</strong>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12345" target="_blank">#12345</a> Voice Chatbot Dispute Submission
+
+🎯 <strong>Features (2):</strong>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12346" target="_blank">#12346</a> Automated Information Capture for Disputes <span style="color:#999;">(parent: #12345)</span>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12347" target="_blank">#12347</a> Supplementary Information Submission <span style="color:#999;">(parent: #12345)</span>
+
+📝 <strong>User Stories (2):</strong>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12348" target="_blank">#12348</a> Capture Dispute Details via Voice Chatbot <span style="color:#999;">(parent: #12346)</span>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12349" target="_blank">#12349</a> Submit Additional Evidence Using Reference Number <span style="color:#999;">(parent: #12347)</span></pre>
+    </div>
+
+    <div class="preview-box">
+        <h2>3. Partial Success with Errors</h2>
+        <span class="label" style="background:#fff3e0;">Partial Success</span>
+        <pre>🚀 <strong>ADO Export Complete!</strong>
+
+<strong>Created 3 work items:</strong>
+
+📦 <strong>Epics (1):</strong>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12345" target="_blank">#12345</a> Voice Chatbot Dispute Submission
+
+🎯 <strong>Features (2):</strong>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12346" target="_blank">#12346</a> Automated Information Capture <span style="color:#999;">(parent: #12345)</span>
+  • <a href="https://dev.azure.com/rickywck/rde-lab/_workitems/edit/12347" target="_blank">#12347</a> Supplementary Information Submission <span style="color:#999;">(parent: #12345)</span>
+
+<strong style="color:#d32f2f;">⚠️ Errors encountered (2):</strong>
+  • Failed to create Story 'Invalid Story Title': Invalid field value
+  • Failed to create Story 'Another Story': Parent feature not found</pre>
+    </div>
+
+    <div class="preview-box">
+        <h2>4. Export Failure</h2>
+        <span class="label" style="background:#ffebee;">Error</span>
+        <pre>❌ <strong>ADO Export Failed</strong>
+
+• Missing ADO configuration. Ensure config.poc.yaml has ado section or set env vars ADO_PAT, ADO_ORG, ADO_PROJECT.</pre>
+    </div>
+
+    <h2 style="margin-top: 40px;">Key Improvements</h2>
+    <ul>
+        <li>✅ Clear work item IDs with clickable links</li>
+        <li>✅ Grouped by type (Epics, Features, Stories)</li>
+        <li>✅ Parent-child relationships shown</li>
+        <li>✅ Count summaries for each type</li>
+        <li>✅ Error messages are clearly separated</li>
+        <li>✅ No raw JSON dumping</li>
+        <li>✅ Visual hierarchy with icons and formatting</li>
+    </ul>
+</body>
+</html>

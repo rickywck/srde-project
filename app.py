@@ -17,9 +17,14 @@ from openai import OpenAI
 from pinecone import Pinecone
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from supervisor import SupervisorAgent
 from workflows import BacklogSynthesisWorkflow, StrandsBacklogWorkflow
+from tools.ado_writer_tool import create_ado_writer_tool
 
 app = FastAPI(title="Backlog Synthesizer POC")
 
@@ -140,6 +145,38 @@ async def extract_text(file: UploadFile = File(...)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
+
+@app.post("/ado-export/{run_id}")
+async def ado_export(run_id: str, dry_run: bool = True, filter_tags: Optional[str] = None):
+    """
+    Export generated backlog to Azure DevOps via ADO Writer tool.
+    - dry_run: when true (default), produces a plan without creating items
+    - filter_tags: comma-separated list of tags to include (default new,gap)
+    """
+    try:
+        run_dir = get_run_dir(run_id)
+        backlog_file = run_dir / "generated_backlog.jsonl"
+        if not backlog_file.exists():
+            raise HTTPException(status_code=404, detail="No generated backlog found for this run")
+
+        tags = [t.strip() for t in (filter_tags.split(",") if filter_tags else ["new", "gap"]) if t.strip()]
+        writer = create_ado_writer_tool(run_id)
+        payload = json.dumps({
+            "run_id": run_id,
+            "filter_tags": tags,
+            "dry_run": dry_run
+        })
+        result_json = writer(payload)
+        try:
+            result = json.loads(result_json)
+        except Exception:
+            # If tool returned non-JSON, wrap it
+            result = {"status": "ok", "raw": result_json}
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ADO export failed: {str(e)}")
 
 @app.post("/chat/{run_id}", response_model=ChatResponse)
 async def chat(run_id: str, message: ChatMessage):

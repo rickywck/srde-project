@@ -29,6 +29,8 @@ const generateBtn = document.getElementById('generateBtn');
 const showBacklogBtn = document.getElementById('showBacklogBtn');
 const showTaggingBtn = document.getElementById('showTaggingBtn');
 const evaluateBtn = document.getElementById('evaluateBtn');
+const adoPreviewBtn = document.getElementById('adoPreviewBtn');
+const adoExportBtn = document.getElementById('adoExportBtn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -93,6 +95,21 @@ function setupEventListeners() {
     evaluateBtn.addEventListener('click', () => {
         evaluateQuality();
     });
+
+    // ADO export actions
+    if (adoPreviewBtn) {
+        adoPreviewBtn.onclick = async () => {
+            await adoExport(true);
+        };
+    }
+    if (adoExportBtn) {
+        adoExportBtn.onclick = async () => {
+            const proceed = confirm('This will attempt to export to Azure DevOps. Continue?');
+            if (proceed) {
+                await adoExport(false);
+            }
+        };
+    }
 
     // Chat document attachment
     if (attachBtn && chatFileInput) {
@@ -174,6 +191,8 @@ async function handleFileUpload(file) {
         showBacklogBtn.disabled = false;
         showTaggingBtn.disabled = false;
         evaluateBtn.disabled = false;
+        if (adoPreviewBtn) adoPreviewBtn.disabled = false;
+        if (adoExportBtn) adoExportBtn.disabled = false;
         
         // Add system message
         addMessage('system', `✅ Document "${file.name}" uploaded successfully!`);
@@ -187,6 +206,116 @@ async function handleFileUpload(file) {
     } catch (error) {
         console.error('Upload error:', error);
         addMessage('system', `❌ Upload failed: ${error.message}`);
+    } finally {
+        setBusy(false);
+    }
+}
+
+async function adoExport(dryRun = true) {
+    if (!currentRunId) {
+        addMessage('system', '❌ No run available. Please upload a document or start a chat.');
+        return;
+    }
+    setBusy(true, dryRun ? 'Building ADO export preview...' : 'Exporting to ADO...');
+    try {
+        const url = `/ado-export/${currentRunId}?dry_run=${dryRun}&filter_tags=new,gap`;
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `Request failed (${res.status})`);
+        }
+        const data = await res.json();
+        const counts = data?.summary?.counts || {};
+        
+        if (dryRun) {
+            // Preview mode - show what will be created
+            const adoConfig = data?.summary?.ado_config || {};
+            let previewMsg = `🧾 <strong>ADO Export Preview</strong>\n\n`;
+            previewMsg += `<strong>What will be created:</strong>\n`;
+            previewMsg += `  📦 Epics: ${counts.epics || 0}\n`;
+            previewMsg += `  🎯 Features: ${counts.features || 0}\n`;
+            previewMsg += `  📝 User Stories: ${counts.stories || 0}\n\n`;
+            previewMsg += `<strong>Target:</strong> ${adoConfig.organization}/${adoConfig.project}\n`;
+            previewMsg += `<strong>Filter:</strong> ${(data?.summary?.filter_tags || []).join(', ')}\n`;
+            previewMsg += `<strong>Status:</strong> ${adoConfig.pat_present ? '✅ Ready to export' : '❌ PAT not configured'}`;
+            addMessage('system', previewMsg);
+        } else {
+            // Actual export - show detailed results
+            const createdItems = data?.created_items || [];
+            const exportCounts = data?.counts || {};
+            const errors = data?.errors || [];
+            
+            let resultMsg = '';
+            
+            if (data.status === 'ok' || data.status === 'partial') {
+                resultMsg += `🚀 <strong>ADO Export Complete!</strong>\n\n`;
+                
+                if (createdItems.length > 0) {
+                    resultMsg += `<strong>Created ${createdItems.length} work item${createdItems.length !== 1 ? 's' : ''}:</strong>\n\n`;
+                    
+                    // Group by type
+                    const epics = createdItems.filter(item => item.type === 'Epic');
+                    const features = createdItems.filter(item => item.type === 'Feature');
+                    const stories = createdItems.filter(item => item.type === 'User Story');
+                    
+                    if (epics.length > 0) {
+                        resultMsg += `📦 <strong>Epics (${epics.length}):</strong>\n`;
+                        epics.forEach(item => {
+                            resultMsg += `  • <a href="${item.url}" target="_blank" style="color:#667eea;text-decoration:none;">#${item.ado_id}</a> ${item.title}\n`;
+                        });
+                        resultMsg += `\n`;
+                    }
+                    
+                    if (features.length > 0) {
+                        resultMsg += `🎯 <strong>Features (${features.length}):</strong>\n`;
+                        features.forEach(item => {
+                            resultMsg += `  • <a href="${item.url}" target="_blank" style="color:#667eea;text-decoration:none;">#${item.ado_id}</a> ${item.title}`;
+                            if (item.parent_ado_id) {
+                                resultMsg += ` <span style="color:#999;">(parent: #${item.parent_ado_id})</span>`;
+                            }
+                            resultMsg += `\n`;
+                        });
+                        resultMsg += `\n`;
+                    }
+                    
+                    if (stories.length > 0) {
+                        resultMsg += `📝 <strong>User Stories (${stories.length}):</strong>\n`;
+                        stories.forEach(item => {
+                            resultMsg += `  • <a href="${item.url}" target="_blank" style="color:#667eea;text-decoration:none;">#${item.ado_id}</a> ${item.title}`;
+                            if (item.parent_ado_id) {
+                                resultMsg += ` <span style="color:#999;">(parent: #${item.parent_ado_id})</span>`;
+                            }
+                            resultMsg += `\n`;
+                        });
+                    }
+                } else {
+                    resultMsg += `⚠️ No items were created.\n\n`;
+                }
+                
+                if (errors.length > 0) {
+                    resultMsg += `\n<strong style="color:#d32f2f;">⚠️ Errors encountered (${errors.length}):</strong>\n`;
+                    errors.forEach(err => {
+                        resultMsg += `  • ${err}\n`;
+                    });
+                }
+                
+                addMessage('system', resultMsg);
+            } else {
+                resultMsg += `❌ <strong>ADO Export Failed</strong>\n\n`;
+                if (errors.length > 0) {
+                    errors.forEach(err => {
+                        resultMsg += `• ${err}\n`;
+                    });
+                } else {
+                    resultMsg += `Status: ${data.status}\n`;
+                    resultMsg += `Mode: ${data.mode || 'unknown'}`;
+                }
+                addMessage('system', resultMsg);
+            }
+        }
+    } catch (error) {
+        console.error('ADO export error:', error);
+        addMessage('system', `❌ ADO export error: ${error.message}`);
     } finally {
         setBusy(false);
     }
@@ -346,7 +475,13 @@ function addMessage(role, content) {
     
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    contentDiv.textContent = content;
+    
+    // Use innerHTML for system messages to render HTML formatting, textContent for others for security
+    if (role === 'system') {
+        contentDiv.innerHTML = content;
+    } else {
+        contentDiv.textContent = content;
+    }
     
     messageDiv.appendChild(contentDiv);
     chatMessages.appendChild(messageDiv);

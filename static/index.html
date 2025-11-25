@@ -228,8 +228,24 @@
             color: #666;
             border: 1px solid #ffe4b3;
             max-width: 100%;
-            text-align: center;
+            text-align: left;
             font-size: 13px;
+            white-space: pre-line;
+        }
+
+        .message.system .message-content a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .message.system .message-content a:hover {
+            text-decoration: underline;
+        }
+
+        .message.system .message-content strong {
+            color: #333;
+            font-weight: 600;
         }
 
         .chat-input-area {
@@ -452,6 +468,9 @@
                     <button class="action-btn" id="showBacklogBtn" disabled>📋 Show Backlog Items</button>
                     <button class="action-btn" id="showTaggingBtn" disabled>🏷️ Show Tagging Results</button>
                     <button class="action-btn" id="evaluateBtn" disabled>🧪 Evaluate Quality</button>
+                    <hr style="margin:10px 0; border:none; border-top:1px solid #e0e0e0;" />
+                    <button class="action-btn" id="adoPreviewBtn" disabled>🧾 Preview ADO Export</button>
+                    <button class="action-btn" id="adoExportBtn" disabled>🚀 Export to ADO</button>
                 </div>
 
                 <div class="runs-list">

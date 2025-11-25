@@ -17,6 +17,7 @@ from agents.segmentation_agent import create_segmentation_agent
 from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
 from tools.retrieval_tool import create_retrieval_tool
+from tools.ado_writer_tool import create_ado_writer_tool
 from agents.evaluation_agent import create_evaluation_agent
 from agents.prompt_loader import get_prompt_loader
 
@@ -112,6 +113,7 @@ class SupervisorAgent:
         tagging_agent = create_tagging_agent(run_id)
         retrieval_tool = create_retrieval_tool(run_id)
         evaluation_agent = create_evaluation_agent(run_id)
+        ado_writer_tool = create_ado_writer_tool(run_id)
         
         # Create/update the Strands agent with all specialized agents as tools
         self.agent = Agent(
@@ -123,7 +125,8 @@ class SupervisorAgent:
                 backlog_generation_agent,
                 tagging_agent,
                 retrieval_tool,
-                evaluation_agent
+                evaluation_agent,
+                ado_writer_tool
             ],
             trace_attributes={
                 "service.name": "backlog-synthesizer",
