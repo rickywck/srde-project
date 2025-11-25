@@ -279,6 +279,71 @@
             cursor: not-allowed;
         }
 
+        .attach-btn {
+            padding: 12px;
+            background: #f5f5f5;
+            color: #666;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .attach-btn:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .attach-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .chat-file-input {
+            display: none;
+        }
+
+        .file-indicator {
+            display: none;
+            padding: 8px 12px;
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
+            border-radius: 6px;
+            font-size: 12px;
+            margin-bottom: 10px;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-indicator.active {
+            display: flex;
+        }
+
+        .file-indicator .file-name {
+            flex: 1;
+            color: #2e7d32;
+            font-weight: 500;
+        }
+
+        .file-indicator .remove-file {
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .file-indicator .remove-file:hover {
+            color: #d32f2f;
+        }
+
         .status-bar {
             padding: 8px 20px;
             background: #f0f0f0;
@@ -346,16 +411,21 @@
                 </div>
 
                 <div class="chat-input-area">
+                    <div class="file-indicator" id="chatFileIndicator">
+                        <span class="file-name" id="chatFileName">📎 No file attached</span>
+                        <button class="remove-file" id="removeChatFile" title="Remove file">✕</button>
+                    </div>
                     <div class="input-container">
+                        <button type="button" class="attach-btn" id="attachBtn" title="Attach document">📎</button>
                         <textarea 
                             class="message-input" 
                             id="messageInput" 
                             placeholder="Type your message here... (e.g., 'Analyze this document', 'Generate backlog items')"
                             rows="2"
-                            disabled
                         ></textarea>
-                        <button class="send-btn" id="sendBtn" disabled>Send</button>
+                        <button type="button" class="send-btn" id="sendBtn">Send</button>
                     </div>
+                    <input type="file" class="chat-file-input" id="chatFileInput" accept=".txt,.md,.docx,.pdf">
                 </div>
 
                 <div class="status-bar">
@@ -392,6 +462,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=4"></script>
 </body>
 </html>

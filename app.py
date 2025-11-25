@@ -39,6 +39,7 @@ supervisor = SupervisorAgent()
 class ChatMessage(BaseModel):
     message: str
     instruction_type: Optional[str] = None
+    document_text: Optional[str] = None  # Optional document for chat-specific upload
 
 class ChatResponse(BaseModel):
     run_id: str
@@ -109,6 +110,37 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
+@app.post("/extract-text")
+async def extract_text(file: UploadFile = File(...)):
+    """
+    Extract text from uploaded document (for chat attachment)
+    Supports .txt, .md, .docx, .pdf formats
+    """
+    try:
+        content = await file.read()
+        text = ""
+        
+        if file.filename.endswith('.txt') or file.filename.endswith('.md'):
+            text = content.decode('utf-8')
+        elif file.filename.endswith('.docx'):
+            from docx import Document
+            from io import BytesIO
+            doc = Document(BytesIO(content))
+            text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
+        elif file.filename.endswith('.pdf'):
+            from PyPDF2 import PdfReader
+            from io import BytesIO
+            pdf = PdfReader(BytesIO(content))
+            text = '\n'.join([page.extract_text() for page in pdf.pages])
+        else:
+            # Try to decode as text for other formats
+            text = content.decode('utf-8')
+        
+        return {"text": text, "filename": file.filename}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
+
 @app.post("/chat/{run_id}", response_model=ChatResponse)
 async def chat(run_id: str, message: ChatMessage):
     """
@@ -122,23 +154,20 @@ async def chat(run_id: str, message: ChatMessage):
     - evaluate_backlog_quality: LLM-as-judge quality evaluation
     
     The supervisor uses Strands Agent to decide which tools to invoke based on user message.
+    
+    Document handling:
+    - Chat-specific document: Use document_text provided in the message body
+    - Quick Actions document: NOT used by chat interface (stored in raw.txt)
     """
     try:
+        # Auto-create run directory if it doesn't exist (for chat-only sessions)
         run_dir = get_run_dir(run_id)
-        
-        # Check if run exists
-        if not run_dir.exists():
-            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
         
         # Save user message to history
         save_chat_history(run_id, "user", message.message)
         
-        # Load document if it exists
-        raw_file = run_dir / "raw.txt"
-        document_text = None
-        if raw_file.exists():
-            with open(raw_file, "r") as f:
-                document_text = f.read()
+        # Use chat-provided document (if any), NOT the Quick Actions document
+        document_text = message.document_text
         
         # Get response from supervisor agent (passthrough to LLM)
         response = await supervisor.process_message(

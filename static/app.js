@@ -2,6 +2,8 @@
 
 let currentRunId = null;
 let isBusy = false;
+let chatAttachedDocument = null; // For chat-specific document upload
+let chatAttachedFileName = null;
 
 // DOM elements
 const chatMessages = document.getElementById('chatMessages');
@@ -15,6 +17,13 @@ const statusText = document.getElementById('statusText');
 const tokenInfo = document.getElementById('tokenInfo');
 const runsList = document.getElementById('runsList');
 
+// Chat document upload elements
+const attachBtn = document.getElementById('attachBtn');
+const chatFileInput = document.getElementById('chatFileInput');
+const chatFileIndicator = document.getElementById('chatFileIndicator');
+const chatFileName = document.getElementById('chatFileName');
+const removeChatFile = document.getElementById('removeChatFile');
+
 // Quick action buttons
 const generateBtn = document.getElementById('generateBtn');
 const showBacklogBtn = document.getElementById('showBacklogBtn');
@@ -25,7 +34,15 @@ const evaluateBtn = document.getElementById('evaluateBtn');
 document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     loadRuns();
+    // Enable chat interface on load (no document upload required)
+    enableChatInterface();
 });
+
+function enableChatInterface() {
+    if (messageInput) messageInput.disabled = false;
+    if (sendBtn) sendBtn.disabled = false;
+    if (attachBtn) attachBtn.disabled = false;
+}
 
 function setupEventListeners() {
     // File upload
@@ -76,6 +93,50 @@ function setupEventListeners() {
     evaluateBtn.addEventListener('click', () => {
         evaluateQuality();
     });
+
+    // Chat document attachment
+    if (attachBtn && chatFileInput) {
+        attachBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            chatFileInput.click();
+            return false;
+        };
+        chatFileInput.addEventListener('change', handleChatFileSelect);
+    }
+    
+    if (removeChatFile) {
+        removeChatFile.onclick = function(e) {
+            e.preventDefault();
+            removeChatAttachment();
+            return false;
+        };
+    }
+    
+    // Drag and drop for chat input area
+    const chatInputArea = document.querySelector('.chat-input-area');
+    chatInputArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        chatInputArea.style.background = '#e8f5e9';
+    });
+    
+    chatInputArea.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        chatInputArea.style.background = 'white';
+    });
+    
+    chatInputArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        chatInputArea.style.background = 'white';
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            // Simulate file input change
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(files[0]);
+            chatFileInput.files = dataTransfer.files;
+            handleChatFileSelect({ target: chatFileInput });
+        }
+    });
 }
 
 function handleFileSelect(event) {
@@ -108,6 +169,7 @@ async function handleFileUpload(file) {
         runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
         messageInput.disabled = false;
         sendBtn.disabled = false;
+        attachBtn.disabled = false;
         generateBtn.disabled = false;
         showBacklogBtn.disabled = false;
         showTaggingBtn.disabled = false;
@@ -130,9 +192,93 @@ async function handleFileUpload(file) {
     }
 }
 
+async function handleChatFileSelect(event) {
+    const file = event.target.files[0];
+    if (file) {
+        setBusy(true, 'Reading document...');
+        
+        try {
+            let text = '';
+            
+            // Check file type and read accordingly
+            if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+                text = await file.text();
+            } else if (file.name.endsWith('.docx') || file.name.endsWith('.pdf')) {
+                // For binary formats, we'll send to backend for processing
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch('/extract-text', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to extract text from document');
+                }
+                
+                const data = await response.json();
+                text = data.text;
+            } else {
+                // Try to read as text for other formats
+                text = await file.text();
+            }
+            
+            chatAttachedDocument = text;
+            chatAttachedFileName = file.name;
+            
+            // Update UI to show file is attached
+            chatFileName.textContent = `📎 ${file.name}`;
+            chatFileIndicator.classList.add('active');
+            
+            addMessage('system', `📎 File "${file.name}" attached to next message`);
+        } catch (error) {
+            console.error('Error reading chat file:', error);
+            addMessage('system', `❌ Failed to read file: ${error.message}`);
+        } finally {
+            setBusy(false);
+        }
+    }
+}
+
+function removeChatAttachment() {
+    chatAttachedDocument = null;
+    chatAttachedFileName = null;
+    chatFileInput.value = '';
+    chatFileIndicator.classList.remove('active');
+    chatFileName.textContent = '📎 No file attached';
+    addMessage('system', '📎 Attachment removed');
+}
+
+async function createEmptyRun() {
+    // Create a new run without uploading a document
+    const runId = generateRunId();
+    currentRunId = runId;
+    
+    // Update UI
+    runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
+    
+    // Note: Quick action buttons remain disabled until document is uploaded
+    return runId;
+}
+
+function generateRunId() {
+    // Generate a UUID v4 compatible string
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
 async function sendMessage() {
     const message = messageInput.value.trim();
-    if (!message || isBusy || !currentRunId) return;
+    if (!message || isBusy) return;
+    
+    // Auto-create run if one doesn't exist
+    if (!currentRunId) {
+        await createEmptyRun();
+    }
     
     // Clear input
     messageInput.value = '';
@@ -143,12 +289,23 @@ async function sendMessage() {
     setBusy(true, 'Thinking...');
     
     try {
+        // Prepare request body with optional document
+        const requestBody = {
+            message: message
+        };
+        
+        // Include chat-attached document if present
+        if (chatAttachedDocument) {
+            requestBody.document_text = chatAttachedDocument;
+            addMessage('system', `📄 Sending message with attached document: ${chatAttachedFileName}`);
+        }
+        
         const response = await fetch(`/chat/${currentRunId}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ message })
+            body: JSON.stringify(requestBody)
         });
         
         if (!response.ok) {
@@ -159,6 +316,11 @@ async function sendMessage() {
         
         // Add assistant response
         addMessage('assistant', data.response);
+        
+        // Clear chat attachment after successful send
+        if (chatAttachedDocument) {
+            removeChatAttachment();
+        }
         
         // Update token info if available
         if (data.status.tokens_used) {
@@ -484,10 +646,9 @@ function setBusy(busy, message = 'Ready') {
         messageInput.disabled = true;
     } else {
         statusDot.classList.remove('busy');
-        if (currentRunId) {
-            sendBtn.disabled = false;
-            messageInput.disabled = false;
-        }
+        // Always re-enable chat inputs (no longer requires Quick Actions upload)
+        sendBtn.disabled = false;
+        messageInput.disabled = false;
     }
 }
 

@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import yaml
-import base64
 from strands import Agent
 from strands.models.openai import OpenAIModel
 from strands.telemetry import StrandsTelemetry
@@ -25,7 +24,12 @@ from agents.prompt_loader import get_prompt_loader
 class SupervisorAgent:
     """
     Supervisor agent that orchestrates the backlog synthesis workflow.
-    Currently implements passthrough to LLM for POC.
+    Uses AWS Strands framework to coordinate specialized agents for:
+    - Document segmentation with intent detection
+    - Context retrieval from vector stores
+    - Backlog item generation (Epics, Features, Stories)
+    - Story tagging and classification
+    - Quality evaluation
     """
     
     def __init__(self, config_path: str = "config.poc.yaml"):
@@ -53,44 +57,15 @@ class SupervisorAgent:
         model_params = prompt_loader.get_parameters("supervisor_agent")
         
         # Initialize OpenAI model for Strands
-        # Note: Strands OpenAIModel reads API key from OPENAI_API_KEY environment variable
         self.model = OpenAIModel(
             model_id=self.config["openai"]["chat_model"],
             params=model_params
         )
         
-        # System prompt loaded from prompts/supervisor_agent.yaml
-        # Legacy hardcoded prompt kept as comment for reference:
-        self.system_prompt_legacy = """You are BacklogSynthAI, a sophisticated orchestrator for software backlog synthesis.
-
-Your role is to:
-1. Analyze incoming user requests about meeting notes and documents
-2. Coordinate specialized agents and tools to fulfill user requests
-3. Guide users through the backlog synthesis workflow
-4. Orchestrate document segmentation, context retrieval, backlog generation, and tagging
-
-Available specialized agents and tools:
-- segment_document: Splits documents into coherent segments with intent detection
-- generate_backlog: Creates epics, features, and user stories from segments
-- tag_story: Tags stories relative to existing backlog as new/gap/conflict
-- retrieve_context: Retrieves relevant ADO items and architecture constraints
-- evaluate_backlog_quality: Evaluates the quality of generated backlog items
-
-Workflow:
-1. User uploads document → Use segment_document tool
-2. For each segment → Use retrieve_context to get relevant existing work
-3. Generate backlog items → Use generate_backlog tool
-4. Tag each story → Use tag_story tool
-5. Optionally write to ADO
-
-Always route requests to the appropriate specialized agent or tool. Be helpful, clear, and focused on completing the user's workflow."""
-        # ^ Legacy prompt preserved above for reference only
-        
         # Track current run_id for tools
         self.current_run_id = None
         
         # Agent will be initialized per-run with appropriate tools
-        # (similar to teachers_assistant pattern)
         self.agent = None
     
     def _load_config(self, config_path: str) -> Dict[str, Any]:
@@ -172,8 +147,6 @@ Always route requests to the appropriate specialized agent or tool. Be helpful, 
 --- DOCUMENT START ---
 {document_text[:3000]}{"..." if len(document_text) > 3000 else ""}
 --- DOCUMENT END ---
-
-You have access to a 'segment_document' tool that can split this document into coherent segments with intent detection. Use it when the user asks to analyze, segment, or process the document.
 """
             query_parts.append(context_msg)
         
@@ -223,43 +196,3 @@ You have access to a 'segment_document' tool that can split this document into c
                     "framework": "aws_strands"
                 }
             }
-    
-    async def segment_document(self, run_id: str, document_text: str) -> Dict[str, Any]:
-        """
-        Segment document into coherent chunks with intent labels.
-        This is now implemented as a specialized agent in segmentation_agent.py
-        
-        Args:
-            run_id: Unique identifier for this run
-            document_text: Full text of document to segment
-            
-        Returns:
-            Dict with segmentation results
-        """
-        # Create and invoke segmentation agent directly
-        segmentation_agent = create_segmentation_agent(run_id)
-        result_json = segmentation_agent(document_text)
-        
-        # Parse and return result
-        result = json.loads(result_json)
-        return result
-    
-    async def generate_backlog(self, run_id: str, segment: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Generate backlog items from a segment with retrieved context.
-        To be implemented in future iteration.
-        """
-        return {
-            "status": "not_implemented",
-            "message": "Backlog generation will be implemented in next iteration"
-        }
-    
-    async def tag_story(self, run_id: str, story: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Tag a user story relative to existing backlog.
-        To be implemented in future iteration.
-        """
-        return {
-            "status": "not_implemented",
-            "message": "Story tagging will be implemented in next iteration"
-        }
