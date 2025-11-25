@@ -22,6 +22,24 @@ The RDE system uses a supervisor-coordinated multi-agent architecture to:
 - **Tagging Agent**: Classifies stories as gap/conflict/new relative to existing backlog
 - **Evaluation Agent**: Assesses completeness, relevance, and quality of generated backlog
 
+### Workflow Orchestration
+
+The system provides two workflow implementations for backlog generation:
+
+1. **BacklogSynthesisWorkflow** (Custom Sequential)
+   - Explicit control over workflow stages with clear dependency management
+   - Sequential execution: segment → retrieve → generate → tag → evaluate
+   - Lazy initialization of expensive resources (OpenAI, Pinecone clients)
+   - Ideal for debugging, development, and simple documents
+
+2. **StrandsBacklogWorkflow** (Strands Native)
+   - Automatic dependency resolution and parallel execution where possible
+   - Built-in retry logic with exponential backoff
+   - Progress monitoring, pause/resume capabilities
+   - Best for production, large documents, and complex workflows
+
+Both workflows are externalized from the FastAPI layer into dedicated `workflows/` modules, providing clean separation between UI, orchestration, and agent logic.
+
 ### Technology Stack
 
 - **Framework**: AWS Strands for multi-agent orchestration
@@ -30,6 +48,7 @@ The RDE system uses a supervisor-coordinated multi-agent architecture to:
 - **Vector Store**: Pinecone (serverless, 512-dim embeddings)
 - **Frontend**: HTML/CSS/JavaScript chat interface
 - **Prompt Management**: YAML-based external configuration with centralized loader
+- **Workflow Orchestration**: Externalized workflow modules with Strands integration
 
 ## Prerequisites
 
@@ -151,6 +170,19 @@ User: "Evaluate the quality of generated items"
 System: [Provides completeness, relevance, and quality scores]
 ```
 
+### Workflow Execution
+
+```bash
+# Use default custom sequential workflow
+curl -X POST http://localhost:8000/generate-backlog/123e4567-e89b-12d3-a456-426614174000
+
+# Use Strands native workflow with automatic optimization
+curl -X POST "http://localhost:8000/generate-backlog/123e4567-e89b-12d3-a456-426614174000?use_strands_workflow=true"
+
+# Run evaluation separately
+curl -X POST http://localhost:8000/evaluate/123e4567-e89b-12d3-a456-426614174000
+```
+
 ### Data Ingestion
 
 ```bash
@@ -193,6 +225,10 @@ openai:
 │   ├── tagging_agent.py            # Story classification (gap/conflict/new)
 │   ├── evaluation_agent.py         # Quality assessment (LLM-as-judge)
 │   └── prompt_loader.py            # Centralized prompt management utility
+├── workflows/                 # Workflow orchestration modules
+│   ├── __init__.py                 # Package exports
+│   ├── backlog_synthesis_workflow.py  # Custom sequential workflow
+│   └── strands_workflow.py         # Strands native workflow
 ├── prompts/                   # External YAML prompt configurations
 │   ├── segmentation_agent.yaml
 │   ├── backlog_generation_agent.yaml
@@ -212,7 +248,7 @@ openai:
 ├── docs/                      # Documentation
 │   ├── archive/                   # Development notes (archived)
 │   └── ...
-├── app.py                     # FastAPI application entry point
+├── app.py                     # FastAPI application entry point (335 lines, -43% reduction)
 ├── supervisor.py              # Supervisor agent orchestration
 ├── chunker.py                 # Document chunking utility
 ├── config.poc.yaml            # System configuration
@@ -221,6 +257,14 @@ openai:
 ```
 
 ## How It Works
+
+### Workflow Architecture
+
+The system separates concerns into three layers:
+
+1. **UI Layer** (`app.py`): FastAPI endpoints for HTTP handling
+2. **Orchestration Layer** (`workflows/`): Workflow coordination and state management
+3. **Agent Layer** (`agents/`): Specialized AI agents for specific tasks
 
 ### Supervisor Orchestration
 
@@ -231,6 +275,22 @@ The supervisor agent coordinates all specialized agents using AWS Strands framew
 3. Agents are executed with appropriate context and prompts
 4. Results are aggregated and returned to user
 5. Session state persisted in `runs/{run_id}/` directory
+
+### Workflow Execution
+
+Two workflow implementations provide flexibility:
+
+**BacklogSynthesisWorkflow** (Sequential):
+- Explicit stage execution: segment → retrieve → generate → tag → evaluate
+- State management in `self.results` dictionary
+- Lazy initialization of OpenAI and Pinecone clients
+- Best for debugging and understanding workflow stages
+
+**StrandsBacklogWorkflow** (Parallel):
+- Automatic dependency resolution from task graph
+- Parallel execution of independent tasks
+- Built-in retry, monitoring, pause/resume
+- Best for production and performance optimization
 
 ### Document Segmentation
 
@@ -274,6 +334,13 @@ The supervisor agent coordinates all specialized agents using AWS Strands framew
 3. Uses structured JSON schema for consistent assessment
 
 ## Key Features
+
+### Externalized Workflow Orchestration
+- Clean separation: UI ↔ Orchestration ↔ Agents
+- Two workflow implementations: sequential (explicit control) and parallel (automatic optimization)
+- Testable workflow logic independent of FastAPI
+- Strands Workflow Tool integration for advanced orchestration
+- No breaking changes to existing API
 
 ### External Prompt Management
 - All agent prompts stored in YAML configuration files (`prompts/`)
@@ -356,9 +423,102 @@ project:
 - Check YAML syntax (indentation, structure)
 - Review agent logs in terminal output
 
+## API Endpoints
+
+### POST /generate-backlog/{run_id}
+
+Generate complete backlog from uploaded document.
+
+**Query Parameters:**
+- `use_strands_workflow` (bool, optional): Use Strands native workflow instead of custom sequential workflow (default: false)
+
+**Response:**
+```json
+{
+  "run_id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "success",
+  "message": "Workflow completed",
+  "counts": {
+    "segments": 5,
+    "backlog_items": 23,
+    "stories": 15,
+    "tags": {"new": 10, "gap": 3, "conflict": 2}
+  },
+  "files": {
+    "segments": "/path/to/segments.jsonl",
+    "backlog": "/path/to/generated_backlog.jsonl",
+    "tagging": "/path/to/tagging.jsonl"
+  }
+}
+```
+
+### POST /evaluate/{run_id}
+
+Evaluate quality of generated backlog items.
+
+**Response:**
+```json
+{
+  "run_id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "success",
+  "evaluation": {
+    "completeness": 8.5,
+    "relevance": 9.0,
+    "quality": 8.0,
+    "overall": 8.5,
+    "suggestions": ["..."]
+  }
+}
+```
+
+## Testing
+
+Run the complete test suite:
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_workflow_refactoring.py -v
+
+# Run with coverage
+pytest tests/ --cov=. --cov-report=html
+
+# Run tests matching pattern
+pytest tests/ -k "workflow" -v
+
+# Run with output for debugging
+pytest tests/ -v -s
+```
+
+### Test Organization
+
+- `test_ado_writer.py` - ADO work item writing functionality
+- `test_evaluation_agent.py` - Quality evaluation agent
+- `test_file_extractor.py` - Document text extraction
+- `test_real_files.py` - Real document processing (TelecomBRD)
+- `test_semantic_search.py` - Vector search and embedding
+- `test_setup.py` - Environment and configuration validation
+- `test_strands_supervisor.py` - Supervisor agent integration
+- `test_tagging_agent.py` - Story classification
+- `test_workflow_api.py` - API endpoint testing
+- `test_workflow_refactoring.py` - Workflow module structure
+
+### Mock Mode
+
+Many tests support mock mode to avoid LLM API calls:
+
+```bash
+export EVALUATION_AGENT_MOCK=1
+export SEGMENTATION_AGENT_MOCK=1
+pytest tests/ -v
+```
+
 ## Development Notes
 
 Development documentation archived in `docs/archive/`:
+- `WORKFLOW_REFACTORING.md` - Workflow externalization and Strands integration
 - `PROMPT_EXTERNALIZATION.md` - Prompt refactoring details
 - `SUPERVISOR_INTEGRATION.md` - Supervisor agent implementation
 - `STRANDS_UPGRADE.md` - AWS Strands migration notes

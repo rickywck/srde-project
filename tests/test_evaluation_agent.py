@@ -14,6 +14,11 @@ from agents.evaluation_agent import create_evaluation_agent
 def test_evaluation_agent_mock(mode):
     os.environ["EVALUATION_AGENT_MOCK"] = "1"
     run_id = str(uuid.uuid4())
+    
+    # Ensure run directory exists for file writing
+    run_dir = Path(f"runs/{run_id}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
     agent_tool = create_evaluation_agent(run_id)
 
     # Minimal synthetic payload

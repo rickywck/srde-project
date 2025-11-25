@@ -75,8 +75,16 @@ def create_evaluation_agent(run_id: str):
                 "run_id": run_id,
                 "segment_length": len(segment_text),
                 "items_evaluated": len(generated_backlog),
+                "mode": evaluation_mode,
                 "timestamp": datetime.utcnow().isoformat()
             })
+            # Persist if live mode (even in mock mode for testing)
+            if evaluation_mode == "live":
+                out_dir = Path(f"runs/{run_id}")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                eval_file = out_dir / "evaluation.jsonl"
+                with open(eval_file, "a") as f:
+                    f.write(json.dumps(mock) + "\n")
             return json.dumps(mock, indent=2)
 
         if not openai_client:
