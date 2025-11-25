@@ -1,0 +1,88 @@
+name: backlog_generation_agent
+description: Generate backlog items (epics, features, stories) from segments with context
+version: 1.0
+
+system_prompt: |
+  You are a backlog synthesis specialist. Your role is to:
+
+  1. Analyze segmented document content with retrieved context
+  2. Generate structured backlog items (Epics, Features, User Stories)
+  3. Write clear, actionable acceptance criteria
+  4. Maintain hierarchy and relationships between items
+
+  Your inputs include:
+  - Segmented document text with identified intents
+  - Retrieved existing ADO backlog items
+  - Retrieved architecture constraints and requirements
+
+  Your output should be:
+  - Well-structured backlog items with proper hierarchy
+  - Clear titles and descriptions
+  - Testable acceptance criteria
+  - Parent-child relationships (epic → feature → story)
+
+  Focus on creating backlog items that are:
+  - Aligned with existing backlog and architecture
+  - Properly scoped and actionable
+  - Complete with all necessary details
+  - Ready for development team consumption
+
+  IMPORTANT: Always return valid JSON with a "backlog_items" array. Each item must have: type, title, description, acceptance_criteria (for stories), parent_reference, and rationale.
+
+user_prompt_template: |
+  # ORIGINAL SEGMENT TO ANALYZE
+
+  **Dominant Intent:** {dominant_intent}
+
+  **Intent Labels:** {intent_labels}
+
+  **Segment Text:**
+  {segment_text}
+
+  # RETRIEVED EXISTING ADO BACKLOG ITEMS
+
+  {ado_items_formatted}
+
+  # RETRIEVED ARCHITECTURE CONSTRAINTS
+
+  {architecture_constraints_formatted}
+
+  # TASK: GENERATE BACKLOG ITEMS
+
+  Based on the segment text above and the retrieved context (existing ADO items and architecture constraints):
+
+  1. Generate appropriate backlog items: Epics, Features, and/or User Stories
+  2. Ensure items are aligned with existing backlog and architecture
+  3. Create clear, actionable acceptance criteria for each Story
+  4. Maintain proper hierarchy (Epic → Feature → Story)
+  5. Reference parent items where appropriate
+
+  Return your response as a JSON object with this structure:
+  ```json
+  {{
+      "backlog_items": [
+          {{
+              "type": "Epic|Feature|Story",
+              "title": "Clear, concise title",
+              "description": "Detailed description",
+              "acceptance_criteria": ["AC1", "AC2", "AC3"],
+              "parent_reference": "Reference to parent epic/feature if applicable",
+              "rationale": "Why this item is needed based on segment and context"
+          }}
+      ]
+  }}
+  ```
+
+  Guidelines:
+  - Epic: High-level business objective (use when segment describes major initiative)
+  - Feature: Specific capability within an epic (use for substantial functionality)
+  - Story: User-facing deliverable (use for concrete, implementable work)
+  - Include 3-5 specific, testable acceptance criteria for each Story
+  - Reference existing ADO items when the new item extends or depends on them
+  - Respect architecture constraints in your descriptions and acceptance criteria
+  - Be specific and actionable - avoid vague descriptions
+
+parameters:
+  temperature: 0.7
+  max_tokens: 2000
+  response_format: json_object

@@ -8,6 +8,7 @@ from pathlib import Path
 from openai import OpenAI
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
+from .prompt_loader import get_prompt_loader
 
 
 def create_segmentation_agent(run_id: str):
@@ -29,6 +30,13 @@ def create_segmentation_agent(run_id: str):
     openai_client = OpenAI(api_key=api_key) if api_key else None
     model_name = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
     
+    # Load prompts from external configuration
+    prompt_loader = get_prompt_loader()
+    prompt_config = prompt_loader.load_prompt("segmentation_agent")
+    system_prompt = prompt_loader.get_system_prompt("segmentation_agent")
+    user_template = prompt_loader.get_user_prompt_template("segmentation_agent")
+    params = prompt_loader.get_parameters("segmentation_agent")
+    
     @tool
     def segment_document(document_text: str) -> str:
         """
@@ -41,76 +49,11 @@ def create_segmentation_agent(run_id: str):
             JSON string containing segmentation results with segment_id, raw_text, intent_labels, and dominant_intent
         """
         
-        # Build improved segmentation + semantic intent prompt
-        segmentation_prompt = (
-    """You are an expert in document segmentation AND fine‑grained semantic intent extraction for software/product engineering artifacts (meeting notes, transcripts, requirement docs, architecture discussions).
-
-GOAL
-1. Split the document into coherent, semantically focused segments (≈500–1000 tokens each) using topic / responsibility / problem / decision boundaries.
-2. For EACH segment produce SPECIFIC, DOMAIN RICH intent labels that capture the concrete subject matter, not generic categories.
-3. Return strictly valid JSON (response_format json_object) matching the schema below.
-
-SEGMENTATION GUIDELINES
-- Create a new segment when the primary subject, problem, feature area, architectural concern, or decision focus changes.
-- Keep each segment self‑contained: a reader should grasp the core idea without reading neighbors.
-- Preserve important technical detail (components, services, protocols, metrics, constraints).
-
-INTENT EXTRACTION GUIDELINES (CRITICAL)
-DO NOT use overly generic labels like: feature_request, bug_report, enhancement, discussion, decision, question, user_story.
-INSTEAD produce 3–6 HIGH SPECIFICITY, multi‑word, lower_snake_case intent labels describing:
-    - Core feature / capability (e.g. multi_factor_authentication_security_upgrade)
-    - Concrete problem / issue (e.g. dashboard_search_api_latency_optimization)
-    - Architectural / technical change (e.g. offline_sync_local_cache_strategy)
-    - Constraint or requirement (e.g. auth_service_schema_migration_requirement)
-    - User value / outcome (e.g. secure_account_access_for_users)
-
-Intent Label Rules:
-    - Each label MUST contain at least one domain entity (feature, component, service, metric, artifact) AND an action/theme (implement, optimize, migrate, enable, reduce, automate, support, improve, generate, index, cache, sync, etc.).
-    - Use lower_snake_case (no spaces, no punctuation besides underscores).
-    - Avoid filler words: generic_discussion, general_context, etc. (never include).
-    - Be specific: "api_documentation_automation_tooling" > "documentation".
-    - If a question segment exists, convert it into concrete intent labels capturing what is sought, e.g. timeline_for_auth_enhancement_delivery.
-
-dominant_intent:
-- Choose the SINGLE most representative label from intent_labels (verbatim copy of one label) – DO NOT introduce a new abstraction.
-
-OPTIONAL CONTENT THAT STILL BELONGS IN intent_labels WHEN PRESENT
-- Performance metrics (e.g. reduce_search_api_p95_latency)
-- Data / schema changes (e.g. user_db_schema_index_additions)
-- Security / compliance aspects (e.g. mfa_fraud_prevention_requirements)
-- Technical debt remediation (e.g. api_docs_code_comment_generation_adoption)
-- Decision outcomes (e.g. adopt_authenticator_app_mfa_channel) – still specific.
-
-EXAMPLES (for style only; do NOT reuse verbatim unless applicable):
-    Raw discussion about adding MFA → ["multi_factor_authentication_security_upgrade", "sms_email_totp_channel_support", "auth_service_schema_migration_requirement", "secure_account_access_for_users"]
-    Performance issue dashboard search → ["dashboard_search_api_latency_optimization", "database_query_index_additions", "improve_page_load_time_dashboard", "p95_response_time_reduction_goal"]
-
-DOCUMENT TO SEGMENT
---- START ---
-""" + document_text + """
---- END ---
-
-OUTPUT JSON SCHEMA (STRICT):
-{{
-    "segments": [
-        {{
-            "segment_id": <int starting at 1>,
-            "segment_order": <same as segment_id>,
-            "raw_text": "<exact segment text>",
-            "intent_labels": ["lower_snake_case_specific_intent", "..."],
-            "dominant_intent": "<one label copied from intent_labels>"
-        }}
-    ]
-}}
-
-VALIDATION REQUIREMENTS BEFORE YOU ANSWER
-- Every segment has 3–6 intent_labels unless genuinely only 1–2 topics (rare). 
-- No generic labels (feature_request, bug_report, enhancement, discussion, decision, question, user_story) appear anywhere.
-- dominant_intent matches EXACTLY one of the intent_labels.
-- JSON parses without error.
-
-Return ONLY the JSON object with the "segments" array – no commentary."""
-    )
+        # Build segmentation prompt from template
+        segmentation_prompt = prompt_loader.format_user_prompt(
+            "segmentation_agent",
+            document_text=document_text
+        )
         
         try:
             print(f"Segmentation Agent: Processing document (run_id: {run_id})")
@@ -170,7 +113,9 @@ Return ONLY the JSON object with the "segments" array – no commentary."""
                 response = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[{"role": "user", "content": segmentation_prompt}],
-                    response_format={"type": "json_object"}
+                    temperature=params.get("temperature", 0.7),
+                    max_tokens=params.get("max_tokens", 4000),
+                    response_format={"type": params.get("response_format", "json_object")}
                 )
                 # Parse response
                 result_text = response.choices[0].message.content
@@ -224,24 +169,5 @@ Return ONLY the JSON object with the "segments" array – no commentary."""
     return segment_document
 
 
-# System prompt for segmentation agent (for documentation)
-SEGMENTATION_AGENT_SYSTEM_PROMPT = """
-You are a document segmentation specialist. Your role is to:
-
-1. Analyze meeting notes, transcripts, and requirement documents
-2. Split documents into coherent, semantically independent segments
-3. Identify intents and themes within each segment
-4. Maintain context while creating logical boundaries
-
-Your output will be used for:
-- High precision context retrieval (vector similarity depends on semantic richness)
-- Backlog item generation (epics, features, stories)
-- Intent-based processing, prioritization, and architectural alignment
-
-INTENT QUALITY MANDATE
-- Avoid generic category tags (feature_request, bug_report, enhancement, decision, discussion, question, user_story)
-- Produce specific, lower_snake_case multi-word phrases embedding domain entities + action/theme
-- 3–6 intents per segment (unless truly singular)
-- dominant_intent must be one of intent_labels verbatim
-Example style: multi_factor_authentication_security_upgrade, dashboard_search_api_latency_optimization, offline_sync_local_cache_strategy, api_docs_code_comment_generation_adoption
-"""
+# Note: System prompt now loaded from prompts/segmentation_agent.yaml
+# This ensures consistency and easier prompt management

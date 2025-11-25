@@ -36,9 +36,11 @@ import re
 from typing import List, Dict, Any
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
+from .prompt_loader import get_prompt_loader
 
 
-TAGGING_AGENT_SYSTEM_PROMPT = """You are a backlog tagging specialist.
+# Note: System prompt now loaded from prompts/tagging_agent.yaml
+TAGGING_AGENT_SYSTEM_PROMPT_LEGACY = """You are a backlog tagging specialist.
 Classify ONE generated user story relative to existing backlog items.
 Return STRICT JSON ONLY with fields: decision_tag, related_ids, reason.
 
@@ -98,35 +100,20 @@ def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], t
     return {"decision_tag": "gap", "related_ids": [c.get("work_item_id") for c in considered[:3]], "reason": "Partial overlap suggests extension"}
 
 
-def _build_llm_prompt(story: Dict[str, Any], above_threshold: List[Dict[str, Any]], threshold: float) -> str:
-    """Construct user prompt for LLM tagging decision."""
-    ac_list = story.get("acceptance_criteria", []) or []
-    ac_text = "\n- " + "\n- ".join(ac_list) if ac_list else " (none)"
-    similar_block_lines = []
-    for s in above_threshold:
-        similar_block_lines.append(
-            f"ID: {s.get('work_item_id')} | similarity: {round(s.get('similarity', 0.0), 4)}\nTitle: {s.get('title')}\nDesc: {s.get('description','')[:300]}"
-        )
-    similar_block = "\n\n".join(similar_block_lines)
-    return f"""Generated Story:
-Title: {story.get('title')}
-Description: {story.get('description')}
-Acceptance Criteria:{ac_text}
-
-Similar Existing Stories (threshold >= {threshold}):
-{similar_block}
-
-Instructions:
-Decide single tag (new|gap|conflict). Provide concise reason (<= 20 words). Output JSON only.
-"""
+# Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
 
 
 def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7):
     """Create a tagging agent tool for a specific run."""
 
+    # Load prompts from external configuration
+    prompt_loader = get_prompt_loader()
+    system_prompt = prompt_loader.get_system_prompt("tagging_agent")
+    params = prompt_loader.get_parameters("tagging_agent")
+    
     # Prepare lightweight model instance (reads OPENAI_API_KEY env)
     model_id = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
-    model = OpenAIModel(model_id=model_id, params={"temperature": 0.2, "max_tokens": 500})
+    model = OpenAIModel(model_id=model_id, params={"temperature": params.get("temperature", 0.2), "max_tokens": params.get("max_tokens", 500)})
 
     @tool
     def tag_story(story_data: str) -> str:
@@ -165,10 +152,27 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
                 "model_used": model_id
             })
 
-        # Build prompt for LLM
-        user_prompt = _build_llm_prompt(story, above_threshold, threshold)
+        # Build prompt for LLM using template
+        ac_list = story.get("acceptance_criteria", []) or []
+        ac_text = "\n- " + "\n- ".join(ac_list) if ac_list else " (none)"
+        
+        similar_lines = []
+        for s in above_threshold:
+            similar_lines.append(
+                f"ID: {s.get('work_item_id')} | similarity: {round(s.get('similarity', 0.0), 4)}\nTitle: {s.get('title')}\nDesc: {s.get('description','')[:300]}"
+            )
+        similar_formatted = "\n\n".join(similar_lines)
+        
+        user_prompt = prompt_loader.format_user_prompt(
+            "tagging_agent",
+            story_title=story.get("title"),
+            story_description=story.get("description"),
+            story_acceptance_criteria=ac_text,
+            similarity_threshold=threshold,
+            similar_stories_formatted=similar_formatted
+        )
 
-        agent = Agent(model=model, system_prompt=TAGGING_AGENT_SYSTEM_PROMPT, tools=[], callback_handler=None)
+        agent = Agent(model=model, system_prompt=system_prompt, tools=[], callback_handler=None)
         llm_response = agent(user_prompt)
         llm_text = str(llm_response)
 

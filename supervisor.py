@@ -19,6 +19,7 @@ from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
 from tools.retrieval_tool import create_retrieval_tool
 from agents.evaluation_agent import create_evaluation_agent
+from agents.prompt_loader import get_prompt_loader
 
 
 class SupervisorAgent:
@@ -45,21 +46,22 @@ class SupervisorAgent:
         # os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:4318"
         # self.telemetry = StrandsTelemetry().setup_otlp_exporter()
         
+        # Load prompts from external configuration
+        prompt_loader = get_prompt_loader()
+        prompt_config = prompt_loader.load_prompt("supervisor_agent")
+        self.system_prompt = prompt_loader.get_system_prompt("supervisor_agent")
+        model_params = prompt_loader.get_parameters("supervisor_agent")
+        
         # Initialize OpenAI model for Strands
         # Note: Strands OpenAIModel reads API key from OPENAI_API_KEY environment variable
-        model_config = {
-            "temperature": 0.7,
-            "max_tokens": 2000,
-            "top_p": 0.9,
-        }
-        
         self.model = OpenAIModel(
             model_id=self.config["openai"]["chat_model"],
-            params=model_config
+            params=model_params
         )
         
-        # System prompt for the supervisor
-        self.system_prompt = """You are BacklogSynthAI, a sophisticated orchestrator for software backlog synthesis.
+        # System prompt loaded from prompts/supervisor_agent.yaml
+        # Legacy hardcoded prompt kept as comment for reference:
+        self.system_prompt_legacy = """You are BacklogSynthAI, a sophisticated orchestrator for software backlog synthesis.
 
 Your role is to:
 1. Analyze incoming user requests about meeting notes and documents
@@ -82,6 +84,7 @@ Workflow:
 5. Optionally write to ADO
 
 Always route requests to the appropriate specialized agent or tool. Be helpful, clear, and focused on completing the user's workflow."""
+        # ^ Legacy prompt preserved above for reference only
         
         # Track current run_id for tools
         self.current_run_id = None

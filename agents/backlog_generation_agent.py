@@ -4,9 +4,11 @@ Backlog Generation Agent - Specialized agent for generating backlog items from s
 
 import os
 import json
+from typing import Dict, Any
 from pathlib import Path
 from openai import OpenAI
 from strands import tool
+from .prompt_loader import get_prompt_loader
 
 
 def create_backlog_generation_agent(run_id: str):
@@ -25,6 +27,11 @@ def create_backlog_generation_agent(run_id: str):
     model_name = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
     
     openai_client = OpenAI(api_key=api_key) if api_key else None
+    
+    # Load prompts from external configuration
+    prompt_loader = get_prompt_loader()
+    system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
+    params = prompt_loader.get_parameters("backlog_generation_agent")
     
     @tool
     def generate_backlog(segment_data: str) -> str:
@@ -54,13 +61,30 @@ def create_backlog_generation_agent(run_id: str):
             
             print(f"Backlog Generation Agent: Processing segment {segment_id} (run_id: {run_id})")
             
-            # Build generation prompt
-            prompt = _build_generation_prompt(
+            # Build generation prompt from template
+            ado_items = retrieved_context.get("ado_items", [])
+            arch_constraints = retrieved_context.get("architecture_constraints", [])
+            
+            # Format ADO items
+            ado_formatted = "No relevant existing ADO items found.\n" if not ado_items else ""
+            for item in ado_items:
+                ado_formatted += f"\n## {item.get('type', 'Item')} (ID: {item.get('work_item_id', 'N/A')}, Similarity: {item.get('score', 0):.2f})\n"
+                ado_formatted += f"**Title:** {item.get('title', 'Untitled')}\n"
+                ado_formatted += f"**Description:** {item.get('description', 'No description')}\n"
+            
+            # Format architecture constraints
+            arch_formatted = "No relevant architecture constraints found.\n" if not arch_constraints else ""
+            for constraint in arch_constraints:
+                arch_formatted += f"\n## From {constraint.get('source', 'Unknown')} - {constraint.get('section', '')} (Similarity: {constraint.get('score', 0):.2f})\n"
+                arch_formatted += f"{constraint.get('text', 'No text')}\n"
+            
+            prompt = prompt_loader.format_user_prompt(
+                "backlog_generation_agent",
                 segment_text=segment_text,
-                intent_labels=intent_labels,
+                intent_labels=", ".join(intent_labels),
                 dominant_intent=dominant_intent,
-                ado_items=retrieved_context.get("ado_items", []),
-                architecture_constraints=retrieved_context.get("architecture_constraints", [])
+                ado_items_formatted=ado_formatted,
+                architecture_constraints_formatted=arch_formatted
             )
             
             # Check if we have OpenAI client
@@ -74,11 +98,12 @@ def create_backlog_generation_agent(run_id: str):
             response = openai_client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": BACKLOG_GENERATION_AGENT_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.7
+                temperature=params.get("temperature", 0.7),
+                max_tokens=params.get("max_tokens", 2000),
+                response_format={"type": params.get("response_format", "json_object")}
             )
             
             # Parse response
@@ -149,80 +174,7 @@ def create_backlog_generation_agent(run_id: str):
     return generate_backlog
 
 
-def _build_generation_prompt(
-    segment_text: str,
-    intent_labels: list,
-    dominant_intent: str,
-    ado_items: list,
-    architecture_constraints: list
-) -> str:
-    """Build the generation prompt from segment and context"""
-    
-    prompt_parts = []
-    
-    # Section 1: Original segment
-    prompt_parts.append("# ORIGINAL SEGMENT TO ANALYZE\n")
-    prompt_parts.append(f"**Dominant Intent:** {dominant_intent}\n")
-    prompt_parts.append(f"**Intent Labels:** {', '.join(intent_labels)}\n\n")
-    prompt_parts.append(f"**Segment Text:**\n{segment_text}\n")
-    
-    # Section 2: Retrieved ADO items
-    prompt_parts.append("\n# RETRIEVED EXISTING ADO BACKLOG ITEMS\n")
-    if ado_items:
-        for item in ado_items:
-            prompt_parts.append(f"\n## {item.get('type', 'Item')} (ID: {item.get('work_item_id', 'N/A')}, Similarity: {item.get('score', 0):.2f})\n")
-            prompt_parts.append(f"**Title:** {item.get('title', 'Untitled')}\n")
-            prompt_parts.append(f"**Description:** {item.get('description', 'No description')}\n")
-    else:
-        prompt_parts.append("No relevant existing ADO items found.\n")
-    
-    # Section 3: Architecture constraints
-    prompt_parts.append("\n# RETRIEVED ARCHITECTURE CONSTRAINTS\n")
-    if architecture_constraints:
-        for constraint in architecture_constraints:
-            prompt_parts.append(f"\n## From {constraint.get('source', 'Unknown')} - {constraint.get('section', '')} (Similarity: {constraint.get('score', 0):.2f})\n")
-            prompt_parts.append(f"{constraint.get('text', 'No text')}\n")
-    else:
-        prompt_parts.append("No relevant architecture constraints found.\n")
-    
-    # Section 4: Instructions
-    prompt_parts.append("\n# TASK: GENERATE BACKLOG ITEMS\n")
-    prompt_parts.append("""
-Based on the segment text above and the retrieved context (existing ADO items and architecture constraints):
-
-1. Generate appropriate backlog items: Epics, Features, and/or User Stories
-2. Ensure items are aligned with existing backlog and architecture
-3. Create clear, actionable acceptance criteria for each Story
-4. Maintain proper hierarchy (Epic → Feature → Story)
-5. Reference parent items where appropriate
-
-Return your response as a JSON object with this structure:
-```json
-{
-    "backlog_items": [
-        {
-            "type": "Epic|Feature|Story",
-            "title": "Clear, concise title",
-            "description": "Detailed description",
-            "acceptance_criteria": ["AC1", "AC2", "AC3"],  // For stories only
-            "parent_reference": "Reference to parent epic/feature if applicable",
-            "rationale": "Why this item is needed based on segment and context"
-        }
-    ]
-}
-```
-
-Guidelines:
-- Epic: High-level business objective (use when segment describes major initiative)
-- Feature: Specific capability within an epic (use for substantial functionality)
-- Story: User-facing deliverable (use for concrete, implementable work)
-- Include 3-5 specific, testable acceptance criteria for each Story
-- Reference existing ADO items when the new item extends or depends on them
-- Respect architecture constraints in your descriptions and acceptance criteria
-- Be specific and actionable - avoid vague descriptions
-""")
-    
-    return "".join(prompt_parts)
+# Note: Prompt building now handled by prompt_loader from prompts/backlog_generation_agent.yaml
 
 
 def _mock_generation(segment_id: int, segment_text: str, intent_labels: list, run_id: str) -> str:
@@ -340,30 +292,4 @@ def _mock_generation(segment_id: int, segment_text: str, intent_labels: list, ru
     
     return json.dumps(summary, indent=2)
 
-
-# System prompt for backlog generation agent
-BACKLOG_GENERATION_AGENT_SYSTEM_PROMPT = """You are a backlog synthesis specialist. Your role is to:
-
-1. Analyze segmented document content with retrieved context
-2. Generate structured backlog items (Epics, Features, User Stories)
-3. Write clear, actionable acceptance criteria
-4. Maintain hierarchy and relationships between items
-
-Your inputs include:
-- Segmented document text with identified intents
-- Retrieved existing ADO backlog items
-- Retrieved architecture constraints and requirements
-
-Your output should be:
-- Well-structured backlog items with proper hierarchy
-- Clear titles and descriptions
-- Testable acceptance criteria
-- Parent-child relationships (epic → feature → story)
-
-Focus on creating backlog items that are:
-- Aligned with existing backlog and architecture
-- Properly scoped and actionable
-- Complete with all necessary details
-- Ready for development team consumption
-
-IMPORTANT: Always return valid JSON with a "backlog_items" array. Each item must have: type, title, description, acceptance_criteria (for stories), parent_reference, and rationale."""
+# Note: System prompt and user prompt template now loaded from prompts/backlog_generation_agent.yaml

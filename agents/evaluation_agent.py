@@ -11,6 +11,7 @@ from typing import Dict, Any, List
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
 from openai import OpenAI
+from .prompt_loader import get_prompt_loader
 
 EVALUATION_SCHEMA = {
     "completeness": {"score": "int (1-5)", "reasoning": "string"},
@@ -48,14 +49,12 @@ def create_evaluation_agent(run_id: str):
     openai_client = OpenAI(api_key=api_key) if api_key else None
     model_name = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
 
-    evaluation_system_prompt = (
-        "You are an expert product manager and backlog quality evaluator. "
-        "Evaluate the generated backlog items based on the original segment and retrieved context. "
-        "Return strict JSON with keys: completeness, relevance, quality, overall_score, summary. "
-        "Each dimension (completeness, relevance, quality) must have a score 1-5 and a reasoning string. "
-        "overall_score is the mean of the three scores (to one decimal if needed). "
-        "Do not include any suggestions or improvement list."
-    )
+    # Load prompts from external configuration
+    prompt_loader = get_prompt_loader()
+    evaluation_system_prompt = prompt_loader.get_system_prompt("evaluation_agent")
+    params = prompt_loader.get_parameters("evaluation_agent")
+    eval_config = prompt_loader.load_prompt("evaluation_agent")
+    evaluation_schema = eval_config.get("evaluation_schema", EVALUATION_SCHEMA)
 
     @tool
     def evaluate_backlog_quality(input_json: str) -> str:
@@ -83,7 +82,7 @@ def create_evaluation_agent(run_id: str):
         if not openai_client:
             return json.dumps({"status": "error", "error": "OPENAI_API_KEY not set and mock mode not enabled"}, indent=2)
 
-        # Build evaluation prompt
+        # Build evaluation prompt using template
         ado_items_fmt = []
         for item in retrieved_context.get("ado_items", [])[:5]:
             ado_items_fmt.append(f"- [{item.get('work_item_id','?')}] {item.get('title','')} :: {item.get('description','')[:120]}")
@@ -97,8 +96,14 @@ def create_evaluation_agent(run_id: str):
                 f"- {bi.get('type','?')}: {bi.get('title','')}\n  Desc: {bi.get('description','')[:160]}\n  ACs: " + "; ".join(acs[:5])
             )
 
-        evaluation_schema_str = json.dumps(EVALUATION_SCHEMA, indent=2)
-        user_prompt = f"""## ORIGINAL SEGMENT\n{segment_text[:4000]}\n\n## CONTEXT - EXISTING ADO ITEMS\n{os.linesep.join(ado_items_fmt)}\n\n## CONTEXT - ARCHITECTURE CONSTRAINTS\n{os.linesep.join(arch_fmt)}\n\n## GENERATED BACKLOG ITEMS\n{os.linesep.join(backlog_fmt)}\n\n## TASK\nEvaluate backlog quality. Provide JSON only.\nSchema: {evaluation_schema_str}\n"""
+        user_prompt = prompt_loader.format_user_prompt(
+            "evaluation_agent",
+            segment_text=segment_text[:4000],
+            ado_items_formatted=os.linesep.join(ado_items_fmt) if ado_items_fmt else "None",
+            architecture_constraints_formatted=os.linesep.join(arch_fmt) if arch_fmt else "None",
+            backlog_items_formatted=os.linesep.join(backlog_fmt) if backlog_fmt else "None",
+            evaluation_schema=json.dumps(evaluation_schema, indent=2)
+        )
 
         try:
             response = openai_client.chat.completions.create(
@@ -107,7 +112,9 @@ def create_evaluation_agent(run_id: str):
                     {"role": "system", "content": evaluation_system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                response_format={"type": "json_object"}
+                temperature=params.get("temperature", 0.3),
+                max_tokens=params.get("max_tokens", 1000),
+                response_format={"type": params.get("response_format", "json_object")}
             )
             content = response.choices[0].message.content
             eval_obj = json.loads(content)
