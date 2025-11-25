@@ -249,6 +249,10 @@ class ADOBacklogLoader:
 
 def load_config(config_path: str = "config.poc.yaml") -> Dict[str, Any]:
     """Load configuration from YAML file."""
+    # If relative path, resolve from parent directory of this script
+    if not os.path.isabs(config_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(os.path.dirname(script_dir), config_path)
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
@@ -262,8 +266,11 @@ def main():
     
     args = parser.parse_args()
     
-    # Load environment variables
-    load_dotenv()
+    # Load environment variables from parent directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
+    dotenv_path = os.path.join(parent_dir, '.env')
+    load_dotenv(dotenv_path)
     
     # Load configuration
     config = load_config(args.config)
