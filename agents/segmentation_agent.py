@@ -162,7 +162,7 @@ Return ONLY the JSON object with the "segments" array – no commentary."""
                         "intent_labels": intents,
                         "dominant_intent": dominant
                     })
-                result = {"segments": segments}
+                result = {"status": "success_mock", "segments": segments}
             else:
                 if not openai_client:
                     raise ValueError("OpenAI client not initialized and mock mode not enabled. Set OPENAI_API_KEY or SEGMENTATION_AGENT_MOCK=1.")

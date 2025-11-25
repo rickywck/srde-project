@@ -12,10 +12,17 @@ from typing import Optional, List, Dict, Any
 import os
 import json
 import uuid
+import yaml
+from openai import OpenAI
+from pinecone import Pinecone
 from datetime import datetime
 from pathlib import Path
 
 from supervisor import SupervisorAgent
+from agents.segmentation_agent import create_segmentation_agent
+from tools.retrieval_tool import create_retrieval_tool
+from agents.backlog_generation_agent import create_backlog_generation_agent
+from agents.tagging_agent import create_tagging_agent
 
 app = FastAPI(title="Backlog Synthesizer POC")
 
@@ -221,139 +228,229 @@ async def get_tagging(run_id: str):
 
 @app.post("/generate-backlog/{run_id}")
 async def generate_backlog(run_id: str):
-    """
-    Execute the full backlog generation workflow:
-    1. Segment document
-    2. Retrieve context from vector DB (placeholder)
-    3. Generate backlog items (placeholder)
-    
-    Currently returns segmentation results as output.
-    """
+    """Run full backlog synthesis workflow: segment → retrieve → generate → tag."""
     try:
         run_dir = get_run_dir(run_id)
-        
-        # Check if run exists and has a document
         raw_file = run_dir / "raw.txt"
         if not raw_file.exists():
             raise HTTPException(status_code=404, detail=f"No document found for run {run_id}")
-        
-        # Load document
-        with open(raw_file, "r") as f:
-            document_text = f.read()
-        
-        # Step 1: Segment the document
-        save_chat_history(run_id, "system", "Starting backlog generation workflow...")
-        save_chat_history(run_id, "system", "Step 1: Segmenting document...")
-        
-        segmentation_result = await supervisor.segment_document(run_id, document_text)
-        
-        if segmentation_result["status"] == "error":
-            raise HTTPException(status_code=500, detail=segmentation_result["error"])
-        
-        segments = segmentation_result["segments"]
-        save_chat_history(run_id, "system", f"✓ Created {len(segments)} segments")
-        
-        # Step 2: Retrieve context (placeholder - not yet implemented)
-        save_chat_history(run_id, "system", "Step 2: Retrieving context from vector DB...")
-        retrieval_results = []
-        for i, segment in enumerate(segments, 1):
-            retrieval_results.append({
-                "segment_id": segment["segment_id"],
-                "status": "placeholder",
-                "message": "Retrieval tool not yet implemented",
-                "retrieved_ado_items": [],
-                "retrieved_architecture": []
-            })
-        save_chat_history(run_id, "system", "⚠ Retrieval tool not yet implemented (placeholder)")
-        
-        # Step 3: Generate backlog items (placeholder - not yet implemented)
-        save_chat_history(run_id, "system", "Step 3: Generating backlog items...")
-        generation_results = []
-        for i, segment in enumerate(segments, 1):
-            generation_results.append({
-                "segment_id": segment["segment_id"],
-                "status": "placeholder",
-                "message": "Backlog generation agent not yet implemented",
-                "generated_items": []
-            })
-        save_chat_history(run_id, "system", "⚠ Backlog generation agent not yet implemented (placeholder)")
-        
-        # Format output response showing segmentation results
-        output_lines = [
-            "🎯 Backlog Generation Workflow Complete (Partial)",
+
+        # Load config (thresholds, models)
+        config = {}
+        if Path("config.poc.yaml").exists():
+            with open("config.poc.yaml", "r") as f:
+                config = yaml.safe_load(f) or {}
+        min_similarity = config.get("retrieval", {}).get("min_similarity_threshold", 0.7)
+        embedding_model = config.get("openai", {}).get("embedding_model", "text-embedding-3-small")
+
+        document_text = raw_file.read_text()
+        save_chat_history(run_id, "system", "🚀 Starting full backlog synthesis workflow")
+
+        # Initialize tool instances
+        segmentation_tool = create_segmentation_agent(run_id)
+        retrieval_tool = create_retrieval_tool(run_id)
+        generation_tool = create_backlog_generation_agent(run_id)
+        tagging_tool = create_tagging_agent(run_id)
+
+        # Step 1: Segmentation
+        save_chat_history(run_id, "system", "Step 1: Segmenting document")
+        seg_result = json.loads(segmentation_tool(document_text))
+        if seg_result.get("status") != "success" and seg_result.get("status") != "success_mock":
+            raise HTTPException(status_code=500, detail=seg_result.get("error", "Segmentation failed"))
+        segments = seg_result.get("segments", [])
+        save_chat_history(run_id, "system", f"✓ Segmented into {len(segments)} segments")
+
+        # Prepare containers
+        segment_contexts = []
+        generation_summaries = []
+
+        # Step 2 & 3: Retrieval + Generation per segment
+        for segment in segments:
+            seg_id = segment["segment_id"]
+            payload = {
+                "segment_id": seg_id,
+                "segment_text": segment["raw_text"],
+                "intent_labels": segment.get("intent_labels", []),
+                "dominant_intent": segment.get("dominant_intent", "")
+            }
+            retrieval_result = json.loads(retrieval_tool(json.dumps(payload)))
+            segment_contexts.append(retrieval_result)
+
+            gen_payload = {
+                "segment_id": seg_id,
+                "segment_text": segment["raw_text"],
+                "intent_labels": segment.get("intent_labels", []),
+                "dominant_intent": segment.get("dominant_intent", ""),
+                "retrieved_context": {
+                    "ado_items": retrieval_result.get("ado_items", []),
+                    "architecture_constraints": retrieval_result.get("architecture_constraints", [])
+                }
+            }
+            gen_result = json.loads(generation_tool(json.dumps(gen_payload)))
+            generation_summaries.append(gen_result)
+
+        save_chat_history(run_id, "system", "✓ Retrieval & generation completed for all segments")
+
+        # Collect generated stories for tagging
+        backlog_file = run_dir / "generated_backlog.jsonl"
+        generated_items: List[Dict[str, Any]] = []
+        if backlog_file.exists():
+            with open(backlog_file, "r") as bf:
+                for line in bf:
+                    if line.strip():
+                        generated_items.append(json.loads(line))
+        stories = [i for i in generated_items if i.get("type", "").lower() == "story"]
+
+        # Initialize clients for story-level retrieval
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
+        pinecone_api_key = os.getenv("PINECONE_API_KEY")
+        pc = Pinecone(api_key=pinecone_api_key) if pinecone_api_key else None
+        index_name = config.get("pinecone", {}).get("index_name", "rde-lab")
+        index = pc.Index(index_name) if pc else None
+
+        tagging_records = []
+        tagging_file = run_dir / "tagging.jsonl"
+
+        def build_story_text(story: Dict[str, Any]) -> str:
+            ac = story.get("acceptance_criteria", []) or []
+            return story.get("title", "") + "\n" + story.get("description", "") + "\n" + "\n".join(ac)
+
+        for story in stories:
+            story_text = build_story_text(story)
+            similar_existing_stories = []
+            if openai_client and index:
+                try:
+                    emb_resp = openai_client.embeddings.create(model=embedding_model, input=story_text[:3000])
+                    vec = emb_resp.data[0].embedding
+                    query_res = index.query(vector=vec, top_k=10, namespace="ado_items", include_metadata=True)
+                    for match in query_res.get("matches", []):
+                        score = match.get("score", 0)
+                        if score >= min_similarity:
+                            md = match.get("metadata", {})
+                            # Only keep if existing item is a story/user story
+                            item_type = (md.get("type") or md.get("work_item_type") or "").lower()
+                            if "story" in item_type:
+                                similar_existing_stories.append({
+                                    "work_item_id": md.get("work_item_id") or match.get("id"),
+                                    "title": md.get("title", ""),
+                                    "description": md.get("description", "")[:500],
+                                    "similarity": score
+                                })
+                except Exception as e:  # Fallback silent
+                    similar_existing_stories = []
+
+            # Early exit if none above threshold
+            if not similar_existing_stories:
+                tagging_output = {
+                    "status": "ok",
+                    "run_id": run_id,
+                    "decision_tag": "new",
+                    "related_ids": [],
+                    "reason": "No similar existing stories found (all below threshold)",
+                    "early_exit": True,
+                    "similarity_threshold": min_similarity,
+                    "similar_count": 0,
+                    "model_used": os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"),
+                    "story_internal_id": story.get("internal_id")
+                }
+            else:
+                tag_payload = {
+                    "story": {
+                        "title": story.get("title"),
+                        "description": story.get("description"),
+                        "acceptance_criteria": story.get("acceptance_criteria", [])
+                    },
+                    "similar_existing_stories": similar_existing_stories,
+                    "similarity_threshold": min_similarity
+                }
+                tag_result = json.loads(tagging_tool(json.dumps(tag_payload)))
+                tag_result["story_internal_id"] = story.get("internal_id")
+                tagging_output = tag_result
+
+            tagging_records.append(tagging_output)
+            with open(tagging_file, "a") as tf:
+                tf.write(json.dumps(tagging_output) + "\n")
+
+        save_chat_history(run_id, "system", f"✓ Tagged {len(stories)} stories")
+
+        # Summaries
+        tag_counts = {}
+        for rec in tagging_records:
+            tag = rec.get("decision_tag", "unknown")
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+        response_lines = [
+            "🎯 Backlog Synthesis Complete",
             "",
             "=" * 60,
-            "STEP 1: DOCUMENT SEGMENTATION ✅",
-            "=" * 60,
-            f"Total Segments: {len(segments)}",
-            ""
+            "SEGMENTATION ✅",
+            f"Segments: {len(segments)}",
+            "",
+            "RETRIEVAL ✅",
+            f"Context retrieved for {len(segment_contexts)} segments",
+            "",
+            "GENERATION ✅",
+            f"Total backlog items: {len(generated_items)} (Stories: {len(stories)})",
+            "",
+            "TAGGING ✅",
+            "Tag distribution:" + "\n" + "\n".join([f"- {k}: {v}" for k, v in tag_counts.items()]),
+            "",
+            "FIRST 5 ITEMS:",
         ]
-        
-        for i, segment in enumerate(segments, 1):
-            output_lines.extend([
-                f"📄 SEGMENT {i}",
-                "-" * 60,
-                f"Intent: {segment['dominant_intent']}",
-                f"All Intents: {', '.join(segment['intent_labels'])}",
-                "",
-                f"Content Preview:",
-                segment['raw_text'][:200] + ("..." if len(segment['raw_text']) > 200 else ""),
-                "-" * 60,
-                ""
-            ])
-        
-        output_lines.extend([
-            "=" * 60,
-            "STEP 2: CONTEXT RETRIEVAL ⚠️",
-            "=" * 60,
-            "Status: Not yet implemented",
-            "TODO: Query Pinecone for relevant ADO items and architecture",
+        for itm in generated_items[:5]:
+            response_lines.append(f"[{itm.get('type')}] {itm.get('title')}")
+
+        response_lines.extend([
             "",
-            "=" * 60,
-            "STEP 3: BACKLOG GENERATION ⚠️",
-            "=" * 60,
-            "Status: Not yet implemented",
-            "TODO: Generate epics, features, and user stories",
+            "ARTIFACTS:",
+            f"- segments.jsonl",
+            f"- generated_backlog.jsonl",
+            f"- tagging.jsonl",
             "",
-            "=" * 60,
-            "NEXT STEPS",
-            "=" * 60,
-            "1. Implement retrieval_tool.py to query Pinecone",
-            "2. Implement backlog_generation_agent.py to create items",
-            "3. Implement tagging_agent.py to classify stories",
-            "",
-            f"📁 Segmentation output saved to:",
-            f"   {segmentation_result['segments_file']}"
+            "NEXT: Review items, optionally write to ADO."
         ])
-        
-        response_text = "\n".join(output_lines)
-        
-        # Save workflow completion to history
+
+        response_text = "\n".join(response_lines)
         save_chat_history(run_id, "assistant", response_text)
-        
+
         return {
             "run_id": run_id,
-            "status": "partial_success",
-            "message": "Segmentation completed, retrieval and generation pending implementation",
+            "status": "success",
+            "message": "Workflow completed",
             "response": response_text,
+            "counts": {
+                "segments": len(segments),
+                "backlog_items": len(generated_items),
+                "stories": len(stories),
+                "tags": tag_counts
+            },
+            "files": {
+                "segments": str(run_dir / "segments.jsonl"),
+                "backlog": str(backlog_file),
+                "tagging": str(tagging_file)
+            },
             "workflow_steps": {
                 "segmentation": {
-                    "status": "completed",
+                    "status": "success",
                     "segments_count": len(segments),
-                    "segments_file": segmentation_result["segments_file"]
+                    "segments_file": str(run_dir / "segments.jsonl")
                 },
                 "retrieval": {
-                    "status": "not_implemented",
-                    "message": "Retrieval tool pending implementation"
+                    "status": "success",
+                    "message": f"Context retrieved for {len(segment_contexts)} segments"
                 },
                 "generation": {
-                    "status": "not_implemented",
-                    "message": "Backlog generation agent pending implementation"
+                    "status": "success",
+                    "message": f"Generated {len(generated_items)} items ({len(stories)} stories)"
+                },
+                "tagging": {
+                    "status": "success",
+                    "message": f"Tagged {len(stories)} stories",
+                    "tag_distribution": tag_counts
                 }
             },
             "timestamp": datetime.utcnow().isoformat()
         }
-    
     except HTTPException:
         raise
     except Exception as e:

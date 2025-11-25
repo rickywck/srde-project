@@ -342,37 +342,57 @@ async function generateBacklogWorkflow() {
         return;
     }
     
-    setBusy(true, 'Running backlog generation workflow...');
-    
-    // Add status message
-    addMessage('system', '🚀 Starting backlog generation workflow...');
-    
+    setBusy(true, 'Running backlog synthesis...');
+    addMessage('system', '🚀 Running full workflow (segment → retrieve → generate → tag)');
     try {
-        const response = await fetch(`/generate-backlog/${currentRunId}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (!response.ok) {
-            throw new Error('Workflow execution failed');
-        }
-        
-        const data = await response.json();
-        
-        // Add workflow results
+        const resp = await fetch(`/generate-backlog/${currentRunId}`, { method: 'POST' });
+        if (!resp.ok) throw new Error('Workflow request failed');
+        const data = await resp.json();
         addMessage('assistant', data.response);
         
-        // Add status summary
-        const steps = data.workflow_steps;
-        let statusSummary = '\n📊 Workflow Status:\n';
-        statusSummary += `✅ Segmentation: ${steps.segmentation.segments_count} segments created\n`;
-        statusSummary += `⚠️  Retrieval: ${steps.retrieval.status}\n`;
-        statusSummary += `⚠️  Generation: ${steps.generation.status}`;
+        // Display workflow steps status
+        if (data.workflow_steps) {
+            const steps = data.workflow_steps;
+            let statusMsg = '📊 Workflow Status:\n';
+            
+            if (steps.segmentation) {
+                const icon = steps.segmentation.status === 'success' ? '✅' : '⚠️';
+                statusMsg += `${icon} Segmentation: ${steps.segmentation.segments_count} segments created\n`;
+            }
+            
+            if (steps.retrieval) {
+                const icon = steps.retrieval.status === 'success' ? '✅' : '⚠️';
+                statusMsg += `${icon} Retrieval: ${steps.retrieval.message}\n`;
+            }
+            
+            if (steps.generation) {
+                const icon = steps.generation.status === 'success' ? '✅' : '⚠️';
+                statusMsg += `${icon} Generation: ${steps.generation.message}\n`;
+            }
+            
+            if (steps.tagging) {
+                const icon = steps.tagging.status === 'success' ? '✅' : '⚠️';
+                statusMsg += `${icon} Tagging: ${steps.tagging.message}\n`;
+                if (steps.tagging.tag_distribution) {
+                    statusMsg += '  Tag distribution:\n';
+                    Object.entries(steps.tagging.tag_distribution).forEach(([tag, count]) => {
+                        statusMsg += `    - ${tag}: ${count}\n`;
+                    });
+                }
+            }
+            
+            addMessage('system', statusMsg);
+        }
         
-        addMessage('system', statusSummary);
-        
+        // Display counts summary
+        const counts = data.counts || {};
+        let summary = '📊 Summary\n';
+        summary += `Segments: ${counts.segments || 0}\n`;
+        summary += `Items: ${counts.backlog_items || 0} (Stories: ${counts.stories || 0})\n`;
+        if (counts.tags) {
+            summary += 'Tags:\n' + Object.entries(counts.tags).map(([k,v]) => `- ${k}: ${v}`).join('\n');
+        }
+        addMessage('system', summary);
     } catch (error) {
         console.error('Workflow error:', error);
         addMessage('system', `❌ Workflow failed: ${error.message}`);
@@ -380,6 +400,8 @@ async function generateBacklogWorkflow() {
         setBusy(false);
     }
 }
+
+// Poll function removed (direct synchronous workflow now)
 
 function setBusy(busy, message = 'Ready') {
     isBusy = busy;
