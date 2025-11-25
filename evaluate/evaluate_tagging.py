@@ -1,44 +1,34 @@
 #!/usr/bin/env python3
+"""Tagging Evaluation (Agent Invocation)
+
+Reads evaluation dataset records and invokes the actual tagging agent tool to
+produce a tag (new|gap|conflict) for each generated story relative to provided
+existing stories. Computes precision/recall/F1 metrics and writes per-record
+predictions + aggregate metrics.
 """
-Tagging Evaluation Script (Section 8.2)
 
-Loads a fixed tagging test dataset (datasets/tagging_test.jsonl), calls the Tagging Agent LLM
-for each record (unless --offline is specified), and computes precision/recall/F1 per tag and macro average.
-
-Usage:
-    python evaluate_tagging.py [--config config.poc.yaml] [--offline] [--model gpt-4o]
-
-Outputs:
-    eval/tagging_f1.json           -> aggregate metrics
-    eval/tagging_predictions.jsonl -> per-record prediction details
-
-Offline Mode:
-    If --offline is provided (or no OPENAI_API_KEY is set), a simple heuristic tagger is used:
-      - If any existing story title shares a significant keyword with generated story title -> gap
-      - If generated story implies replacement or stronger policy vs existing story -> conflict
-      - Else new
-    This allows running evaluation without external API calls.
-"""
 import os
-import re
 import json
 import argparse
-from typing import List, Dict, Any
+import re
 from dataclasses import dataclass
+from typing import List, Dict, Any
+from pathlib import Path
+import sys
 
-try:
-    from openai import OpenAI  # OpenAI SDK (already used elsewhere in repo)
-except ImportError:  # Graceful failure; offline mode still works
-    OpenAI = None  # type: ignore
+# Ensure project root is on path for direct script execution
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-DATASET_PATH = os.path.join("datasets", "tagging_test.json")
+from agents.tagging_agent import create_tagging_agent
+
+DATASET_PATH = os.path.join("datasets", "eval_dataset.json")  # Accept .json or .jsonl
 EVAL_DIR = os.path.join("eval")
-PREDICTIONS_JSONL = os.path.join(EVAL_DIR, "tagging_predictions.json")
+PREDICTIONS_JSONL = os.path.join(EVAL_DIR, "tagging_predictions.jsonl")
 METRICS_JSON = os.path.join(EVAL_DIR, "tagging_f1.json")
 
-DEFAULT_MODEL = "gpt-4o"
-
+DEFAULT_THRESHOLD = 0.6
 TAG_VALUES = ["new", "gap", "conflict"]
+
 
 @dataclass
 class Record:
@@ -62,20 +52,32 @@ def read_dataset(path: str) -> List[Record]:
     records: List[Record] = []
     if not os.path.exists(path):
         raise FileNotFoundError(f"Dataset not found at {path}")
-    with open(path, "r") as f:
-        for line in f:
+    raw = open(path, "r").read().strip()
+    # Support JSON array or JSONL lines
+    objs: List[Dict[str, Any]] = []
+    if raw.startswith("["):
+        try:
+            objs = json.loads(raw)
+        except Exception as e:
+            raise ValueError(f"Failed to parse JSON array dataset: {e}")
+    else:
+        for line in raw.splitlines():
             line = line.strip()
             if not line:
                 continue
-            obj = json.loads(line)
-            records.append(Record(
-                story_title=obj["story_title"],
-                story_description=obj["story_description"],
-                story_acceptance_criteria=obj["story_acceptance_criteria"],
-                existing_stories=obj["existing_stories"],
-                gold_tag=obj["gold_tag"],
-                gold_related_ids=obj.get("gold_related_ids", [])
-            ))
+            try:
+                objs.append(json.loads(line))
+            except Exception as e:
+                raise ValueError(f"Invalid JSON line: {e}: {line[:120]}")
+    for obj in objs:
+        records.append(Record(
+            story_title=obj["story_title"],
+            story_description=obj["story_description"],
+            story_acceptance_criteria=obj["story_acceptance_criteria"],
+            existing_stories=obj["existing_stories"],
+            gold_tag=obj["gold_tag"],
+            gold_related_ids=obj.get("gold_related_ids", [])
+        ))
     return records
 
 
@@ -83,91 +85,67 @@ def ensure_eval_dir():
     os.makedirs(EVAL_DIR, exist_ok=True)
 
 
-def build_prompt(record: Record) -> str:
-    existing_fmt = []
-    for i, es in enumerate(record.existing_stories, start=1):
-        ac = " | ".join(es.get("acceptance_criteria", []))
-        existing_fmt.append(f"[{i}] Title: {es['title']}\nDescription: {es['description']}\nAC: {ac}")
-    existing_block = "\n\n".join(existing_fmt) if existing_fmt else "(None)"
-    story_ac = " | ".join(record.story_acceptance_criteria)
-    instructions = (
-        "You are a tagging agent. Classify the generated story relative to existing stories.\n"
-        "Exactly one tag: new, gap, conflict.\n"
-        "Definitions:\n"
-        "- new: No sufficiently similar existing story.\n"
-        "- gap: Extends or complements functionality in one or more existing stories.\n"
-        "- conflict: Overlaps or contradicts an existing story's scope or intent (eg replacement, stronger policy).\n"
-        "Return strict JSON with keys: decision_tag, related_ids (list of existing story titles referenced), reason (short)."
-    )
-    prompt = (
-        f"{instructions}\n\nGenerated Story:\nTitle: {record.story_title}\nDescription: {record.story_description}\nAcceptance Criteria: {story_ac}\n\nExisting Stories:\n{existing_block}\n\nJSON:" 
-    )
-    return prompt
+def compute_similarity(a: str, b: str) -> float:
+    atoks = {t.lower() for t in re.split(r"\W+", a) if t}
+    btoks = {t.lower() for t in re.split(r"\W+", b) if t}
+    if not atoks or not btoks:
+        return 0.0
+    inter = len(atoks & btoks)
+    union = len(atoks | btoks)
+    return inter / union if union else 0.0
 
 
-def call_openai(prompt: str, model: str) -> Dict[str, Any]:
-    if OpenAI is None:
-        raise RuntimeError("OpenAI SDK not available; install the openai package or use --offline")
-    client = OpenAI()
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": "You are a precise JSON-producing assistant."}, {"role": "user", "content": prompt}],
-        temperature=0.0,
-    )
-    content = response.choices[0].message.content.strip()
-    # Attempt JSON parse; if fails, try to extract JSON substring
+def build_agent_input(record: Record, threshold: float) -> Dict[str, Any]:
+    similar_existing_stories = []
+    for idx, es in enumerate(record.existing_stories, start=1):
+        # Compute title and description similarity separately; use max so strong title match isn't diluted.
+        title_sim = compute_similarity(record.story_title, es.get('title',''))
+        desc_sim = compute_similarity(record.story_description, es.get('description',''))
+        sim = max(title_sim, desc_sim)
+        similar_existing_stories.append({
+            "work_item_id": es.get("work_item_id", idx),
+            "title": es.get("title", ""),
+            "description": es.get("description", ""),
+            "similarity": sim,
+            "title_similarity": title_sim,
+            "description_similarity": desc_sim,
+        })
+    return {
+        "story": {
+            "title": record.story_title,
+            "description": record.story_description,
+            "acceptance_criteria": record.story_acceptance_criteria,
+        },
+        "similar_existing_stories": similar_existing_stories,
+        "similarity_threshold": threshold,
+    }
+
+
+def invoke_tagging_agent(tool_fn, payload: Dict[str, Any]) -> Dict[str, Any]:
+    raw = tool_fn(json.dumps(payload))
     try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        import re
-        match = re.search(r"\{.*\}\Z", content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
-        raise ValueError(f"Model output not valid JSON: {content[:200]}")
+        return json.loads(raw)
+    except Exception:
+        return {"status": "error", "decision_tag": "new", "reason": "Agent JSON parse error", "related_ids": []}
 
 
-def heuristic_tagger(record: Record) -> Dict[str, Any]:
-    title = record.story_title.lower()
-    existing_titles = [es['title'].lower() for es in record.existing_stories]
-
-    # Conflict indicators: replacement, stronger policy keywords
-    conflict_keywords = ["replace", "switch", "strong", "enforce", "migrate"]
-    if any(kw in title for kw in conflict_keywords):
-        related = [es['title'] for es in record.existing_stories if any(kw in es['title'].lower() for kw in conflict_keywords) or any(word in title for word in es['title'].lower().split())]
-        return {"decision_tag": "conflict", "related_ids": related[:2], "reason": "Heuristic conflict keyword match"}
-
-    # Gap: share at least one significant keyword (len>5) with existing title
-    title_tokens = [t for t in re.split(r"\W+", title) if len(t) > 5]
-    for et, es in zip(existing_titles, record.existing_stories):
-        et_tokens = [t for t in re.split(r"\W+", et) if len(t) > 5]
-        if set(title_tokens) & set(et_tokens):
-            return {"decision_tag": "gap", "related_ids": [es['title']], "reason": "Shared significant keyword"}
-
-    return {"decision_tag": "new", "related_ids": [], "reason": "No keyword overlap"}
-
-
-def evaluate(records: List[Record], model: str, offline: bool) -> Dict[str, Any]:
+def evaluate(records: List[Record], threshold: float) -> Dict[str, Any]:
     metrics_counts = {tag: {"TP": 0, "FP": 0, "FN": 0} for tag in TAG_VALUES}
     ensure_eval_dir()
+    tagging_tool = create_tagging_agent(run_id="eval-run")
     with open(PREDICTIONS_JSONL, "w") as pred_f:
         for idx, record in enumerate(records, start=1):
-            if offline:
-                prediction = heuristic_tagger(record)
-            else:
-                prompt = build_prompt(record)
-                try:
-                    prediction = call_openai(prompt, model=model)
-                except Exception as e:
-                    prediction = {"decision_tag": "new", "related_ids": [], "reason": f"Fallback due to error: {e}"}
+            agent_payload = build_agent_input(record, threshold)
+            agent_resp = invoke_tagging_agent(tagging_tool, agent_payload)
+            prediction = {
+                "decision_tag": agent_resp.get("decision_tag", "new"),
+                "related_ids": agent_resp.get("related_ids", []),
+                "reason": agent_resp.get("reason", "")
+            }
             decision_tag = prediction.get("decision_tag", "new").lower()
             if decision_tag not in TAG_VALUES:
                 decision_tag = "new"
-
             gold = record.gold_tag.lower()
-            # Update counts
             for tag in TAG_VALUES:
                 if gold == tag and decision_tag == tag:
                     metrics_counts[tag]["TP"] += 1
@@ -175,7 +153,6 @@ def evaluate(records: List[Record], model: str, offline: bool) -> Dict[str, Any]
                     metrics_counts[tag]["FP"] += 1
                 elif gold == tag and decision_tag != tag:
                     metrics_counts[tag]["FN"] += 1
-
             out_obj = {
                 "index": idx,
                 "story_title": record.story_title,
@@ -185,58 +162,154 @@ def evaluate(records: List[Record], model: str, offline: bool) -> Dict[str, Any]
                 "gold_related_ids": record.gold_related_ids,
             }
             pred_f.write(json.dumps(out_obj) + "\n")
-
-    # Compute precision/recall/F1
     metrics = {}
     f1_values = []
+    total = len(records)
     for tag, counts in metrics_counts.items():
         tp = counts["TP"]
         fp = counts["FP"]
         fn = counts["FN"]
+        tn = total - (tp + fp + fn)  # remaining samples where tag not predicted and not gold
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        accuracy = (tp + tn) / total if total > 0 else 0.0
         metrics[tag] = {
             "precision": round(precision, 4),
             "recall": round(recall, 4),
             "f1": round(f1, 4),
+            "accuracy": round(accuracy, 4),
             "tp": tp,
             "fp": fp,
             "fn": fn,
+            "tn": tn,
         }
         f1_values.append(f1)
-    macro_f1 = sum(f1_values) / len(f1_values) if f1_values else 0.0
-    metrics["macro_f1"] = round(macro_f1, 4)
-
+    metrics["macro_f1"] = round(sum(f1_values) / len(f1_values), 4) if f1_values else 0.0
+    # Store gold vs predicted counts for confusion matrix later
+    metrics["_gold_pred_pairs"] = [
+        {"gold": r.gold_tag.lower(), "pred": json.loads(line).get("predicted_tag") if False else None}
+        for r in []
+    ]  # placeholder (we will rebuild outside since we already wrote predictions file)
     with open(METRICS_JSON, "w") as f:
         json.dump(metrics, f, indent=2)
-
     return metrics
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate tagging agent on fixed dataset")
-    parser.add_argument("--config", default="config.poc.yaml", help="Path to config file")
-    parser.add_argument("--offline", action="store_true", help="Use heuristic tagger instead of LLM")
-    parser.add_argument("--model", default=None, help="Override chat model name")
+    parser = argparse.ArgumentParser(description="Evaluate tagging agent")
+    parser.add_argument("--config", default="config.poc.yaml", help="Config file (optional)")
+    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD, help="Similarity threshold for agent")
     args = parser.parse_args()
-
-    config = load_config(args.config)
-    model = args.model or config.get("openai", {}).get("chat_model", DEFAULT_MODEL)
-
-    offline = args.offline or (os.getenv(config.get("openai", {}).get("api_key_env_var", "OPENAI_API_KEY")) is None)
-    if offline:
-        print("Running in OFFLINE heuristic mode (no OpenAI API key detected or --offline specified)")
-    else:
-        if OpenAI is None:
-            print("OpenAI SDK not installed; falling back to offline mode")
-            offline = True
-
+    print("Mode: Agent invocation")
     records = read_dataset(DATASET_PATH)
-    print(f"Loaded {len(records)} evaluation records")
-    metrics = evaluate(records, model=model, offline=offline)
-    print("Evaluation complete. Metrics written to eval/tagging_f1.json")
-    print(json.dumps(metrics, indent=2))
+    print(f"Loaded {len(records)} records")
+    metrics = evaluate(records, threshold=args.threshold)
+    print("Metrics written to", METRICS_JSON)
+
+    # Render pretty table for per-tag metrics
+    def format_metrics_table(m: Dict[str, Any]) -> str:
+        tag_rows = [t for t in TAG_VALUES if t in m]
+        headers = ["Tag", "Precision", "Recall", "F1", "Accuracy", "TP", "FP", "FN", "TN"]
+        rows = []
+        for t in tag_rows:
+            r = m[t]
+            rows.append([
+                t,
+                f"{r['precision']:.4f}",
+                f"{r['recall']:.4f}",
+                f"{r['f1']:.4f}",
+                f"{r['accuracy']:.4f}",
+                str(r['tp']),
+                str(r['fp']),
+                str(r['fn']),
+                str(r['tn'])
+            ])
+        # Column widths
+        col_widths = [max(len(h), *(len(row[i]) for row in rows)) for i, h in enumerate(headers)]
+        def fmt_row(cells):
+            return " | ".join(cells[i].ljust(col_widths[i]) for i in range(len(cells)))
+        sep = "-+-".join("-" * w for w in col_widths)
+        out_lines = [fmt_row(headers), sep]
+        out_lines += [fmt_row(r) for r in rows]
+        # Macro row
+        if 'macro_f1' in m:
+            macro_f1 = m['macro_f1']
+            macro_line = f"Macro F1: {macro_f1:.4f}"
+            out_lines.append("" )
+            out_lines.append(macro_line)
+        return "\n".join(out_lines)
+
+    # Show per-record gold vs predicted before summary metrics
+    print("\nPer-Record Tag Results:")
+    per_header = ["Idx", "Gold", "Pred", "Title"]
+    per_rows = []
+    with open(PREDICTIONS_JSONL, "r") as pf:
+        for line in pf:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            idx = str(obj.get("index", "?"))
+            gold = obj.get("gold_tag", "").lower()
+            pred = obj.get("predicted_tag", "").lower()
+            title = obj.get("story_title", "")[:50]
+            per_rows.append([idx, gold, pred, title])
+    # Column widths for per-record table
+    if per_rows:
+        col_w = [max(len(h), *(len(r[i]) for r in per_rows)) for i, h in enumerate(per_header)]
+        def fmt_pr_row(c):
+            return " | ".join(c[i].ljust(col_w[i]) for i in range(len(c)))
+        sep_pr = "-+-".join("-" * w for w in col_w)
+        print(fmt_pr_row(per_header))
+        print(sep_pr)
+        for r in per_rows:
+            print(fmt_pr_row(r))
+    else:
+        print("(No prediction rows found)")
+
+    print("\n" + format_metrics_table(metrics))
+
+    # Build multi-class confusion matrix (gold vs predicted) from predictions file
+    confusion = {g: {p: 0 for p in TAG_VALUES} for g in TAG_VALUES}
+    gold_counts = {g: 0 for g in TAG_VALUES}
+    pred_counts = {p: 0 for p in TAG_VALUES}
+    with open(PREDICTIONS_JSONL, "r") as pf:
+        for line in pf:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            gold = obj.get("gold_tag", "").lower()
+            pred = obj.get("predicted_tag", "").lower()
+            if gold in confusion and pred in confusion[gold]:
+                confusion[gold][pred] += 1
+            if gold in gold_counts:
+                gold_counts[gold] += 1
+            if pred in pred_counts:
+                pred_counts[pred] += 1
+    # Render confusion matrix
+    header = ["Gold\\Pred"] + TAG_VALUES
+    col_widths = [max(len(header[0]), 9)] + [max(len(t), 5) for t in TAG_VALUES]
+    def fmt_row(cells):
+        return " | ".join(cells[i].ljust(col_widths[i]) for i in range(len(cells)))
+    sep = "-+-".join("-" * w for w in col_widths)
+    matrix_lines = ["\nConfusion Matrix (Counts)", fmt_row(header), sep]
+    for g in TAG_VALUES:
+        row = [g] + [str(confusion[g][p]) for p in TAG_VALUES]
+        matrix_lines.append(fmt_row(row))
+    matrix_lines.append("")
+    matrix_lines.append("Gold Distribution: " + ", ".join(f"{k}={v}" for k,v in gold_counts.items()))
+    matrix_lines.append("Pred Distribution: " + ", ".join(f"{k}={v}" for k,v in pred_counts.items()))
+    print("\n".join(matrix_lines))
+
+    # Omit raw JSON dump per request; metrics persisted already.
 
 
 if __name__ == "__main__":

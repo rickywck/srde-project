@@ -18,6 +18,7 @@ from agents.segmentation_agent import create_segmentation_agent
 from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
 from tools.retrieval_tool import create_retrieval_tool
+from agents.evaluation_agent import create_evaluation_agent
 
 
 class SupervisorAgent:
@@ -131,6 +132,7 @@ Always route requests to the appropriate specialized agent or tool. Be helpful, 
         backlog_generation_agent = create_backlog_generation_agent(run_id)
         tagging_agent = create_tagging_agent(run_id)
         retrieval_tool = create_retrieval_tool(run_id)
+        evaluation_agent = create_evaluation_agent(run_id)
         
         # Create/update the Strands agent with all specialized agents as tools
         self.agent = Agent(
@@ -141,7 +143,8 @@ Always route requests to the appropriate specialized agent or tool. Be helpful, 
                 segmentation_agent,
                 backlog_generation_agent,
                 tagging_agent,
-                retrieval_tool
+                retrieval_tool,
+                evaluation_agent
             ],
             trace_attributes={
                 "service.name": "backlog-synthesizer",
@@ -199,7 +202,8 @@ You have access to a 'segment_document' tool that can split this document into c
                         "segment_document",
                         "generate_backlog",
                         "tag_story",
-                        "retrieve_context"
+                        "retrieve_context",
+                        "evaluate_backlog_quality"
                     ]
                 }
             }

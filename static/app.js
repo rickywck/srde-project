@@ -19,6 +19,7 @@ const runsList = document.getElementById('runsList');
 const generateBtn = document.getElementById('generateBtn');
 const showBacklogBtn = document.getElementById('showBacklogBtn');
 const showTaggingBtn = document.getElementById('showTaggingBtn');
+const evaluateBtn = document.getElementById('evaluateBtn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -71,6 +72,10 @@ function setupEventListeners() {
     showTaggingBtn.addEventListener('click', () => {
         loadTagging();
     });
+
+    evaluateBtn.addEventListener('click', () => {
+        evaluateQuality();
+    });
 }
 
 function handleFileSelect(event) {
@@ -106,6 +111,7 @@ async function handleFileUpload(file) {
         generateBtn.disabled = false;
         showBacklogBtn.disabled = false;
         showTaggingBtn.disabled = false;
+        evaluateBtn.disabled = false;
         
         // Add system message
         addMessage('system', `✅ Document "${file.name}" uploaded successfully!`);
@@ -227,11 +233,40 @@ async function loadBacklog() {
         if (data.items.length === 0) {
             addMessage('system', '📋 No backlog items generated yet. Ask me to generate them!');
         } else {
-            const summary = `📋 Found ${data.count} backlog items:\n\n` +
-                data.items.map((item, i) => 
-                    `${i + 1}. [${item.type}] ${item.title}`
-                ).join('\n');
-            addMessage('assistant', summary);
+            // Build table view
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            let html = `<div style="font-weight:600;margin-bottom:4px;">📋 Generated Backlog (${data.count} items)</div>`;
+            html += '<table style="border-collapse:collapse;width:100%;font-size:12px;">';
+            html += '<thead><tr>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">#</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Type</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Title</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Description</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Parent</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">ACs</th>' +
+                '</tr></thead><tbody>';
+            for (let i = 0; i < data.items.length; i++) {
+                const item = data.items[i];
+                const acs = (item.acceptance_criteria || []).join('; ');
+                const fullDesc = item.description || '';
+                const desc = fullDesc.slice(0, 240) + (fullDesc.length > 240 ? '…' : '');
+                html += '<tr>' +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${i + 1}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${item.type || ''}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;font-weight:500;">${item.title || ''}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;" title="${fullDesc.replace(/"/g,'&quot;')}">${desc}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${item.parent_reference || '-'}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${acs || '-'}</td>` +
+                    '</tr>';
+            }
+            html += '</tbody></table>';
+            contentDiv.innerHTML = html;
+            messageDiv.appendChild(contentDiv);
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
         
     } catch (error) {
@@ -258,16 +293,51 @@ async function loadTagging() {
         if (data.items.length === 0) {
             addMessage('system', '🏷️ No tagging results yet. Generate backlog items first!');
         } else {
-            const tagCounts = data.items.reduce((acc, item) => {
-                acc[item.decision_tag] = (acc[item.decision_tag] || 0) + 1;
-                return acc;
-            }, {});
-            
-            const summary = `🏷️ Tagging Results (${data.count} stories):\n\n` +
-                Object.entries(tagCounts).map(([tag, count]) => 
-                    `${tag}: ${count}`
-                ).join('\n');
-            addMessage('assistant', summary);
+            // Fetch backlog to enrich story titles
+            let backlogMap = {};
+            try {
+                const backlogResp = await fetch(`/backlog/${currentRunId}`);
+                if (backlogResp.ok) {
+                    const backlogData = await backlogResp.json();
+                    for (const itm of backlogData.items) {
+                        if (itm.internal_id) backlogMap[itm.internal_id] = itm;
+                    }
+                }
+            } catch (_) { /* ignore enrichment errors */ }
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            let html = `<div style="font-weight:600;margin-bottom:4px;">🏷️ Tagging Results (${data.count} stories)</div>`;
+            html += '<table style="border-collapse:collapse;width:100%;font-size:12px;">';
+            html += '<thead><tr>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">#</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Story Title</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Decision</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Reason</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Similar Count</th>' +
+                '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Early Exit</th>' +
+                '</tr></thead><tbody>';
+            for (let i = 0; i < data.items.length; i++) {
+                const rec = data.items[i];
+                const story = backlogMap[rec.story_internal_id] || {};
+                const title = story.title || rec.story_internal_id || '';
+                const fullReason = rec.reason || '';
+                const reason = fullReason.slice(0,180) + (fullReason.length > 180 ? '…' : '');
+                html += '<tr>' +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${i + 1}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;font-weight:500;" title="${title.replace(/"/g,'&quot;')}">${title}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${rec.decision_tag}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;" title="${fullReason.replace(/"/g,'&quot;')}">${reason}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${rec.similar_count}</td>` +
+                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${rec.early_exit ? 'Yes' : 'No'}</td>` +
+                    '</tr>';
+            }
+            html += '</tbody></table>';
+            contentDiv.innerHTML = html;
+            messageDiv.appendChild(contentDiv);
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
         
     } catch (error) {
@@ -327,6 +397,7 @@ async function loadRun(runId) {
     generateBtn.disabled = false;
     showBacklogBtn.disabled = false;
     showTaggingBtn.disabled = false;
+    evaluateBtn.disabled = false;
     
     // Clear messages and load history
     chatMessages.innerHTML = '';
@@ -417,5 +488,58 @@ function setBusy(busy, message = 'Ready') {
             sendBtn.disabled = false;
             messageInput.disabled = false;
         }
+    }
+}
+
+async function evaluateQuality() {
+    if (!currentRunId) {
+        addMessage('system', '❌ Please upload a document first.');
+        return;
+    }
+    setBusy(true, 'Evaluating quality...');
+    addMessage('system', '🧪 Running evaluation (LLM judge)');
+    try {
+        const resp = await fetch(`/evaluate/${currentRunId}`, { method: 'POST' });
+        if (!resp.ok) throw new Error('Evaluation request failed');
+        const data = await resp.json();
+        const ev = data.evaluation || {};
+        // Render evaluation in a single table for clarity
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant';
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        let html = '<div style="font-weight:600;margin-bottom:4px;">📊 Quality Evaluation</div>';
+        html += '<table class="evaluation-table" style="border-collapse:collapse;width:100%;font-size:12px;">';
+        html += '<thead><tr>' +
+            '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Metric</th>' +
+            '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Score</th>' +
+            '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Reasoning</th>' +
+            '</tr></thead><tbody>';
+        const rows = [
+            ['Completeness', ev.completeness?.score, ev.completeness?.reasoning],
+            ['Relevance', ev.relevance?.score, ev.relevance?.reasoning],
+            ['Quality', ev.quality?.score, ev.quality?.reasoning]
+        ];
+        for (const r of rows) {
+            if (r[1] !== undefined) {
+                html += `<tr><td style="border:1px solid #ddd;padding:4px;">${r[0]}</td><td style="border:1px solid #ddd;padding:4px;">${r[1]}</td><td style="border:1px solid #ddd;padding:4px;">${r[2] || ''}</td></tr>`;
+            }
+        }
+        if (ev.overall_score !== undefined) {
+            html += `<tr><td style="border:1px solid #ddd;padding:4px;font-weight:600;">Overall</td><td style="border:1px solid #ddd;padding:4px;font-weight:600;">${ev.overall_score}</td><td style="border:1px solid #ddd;padding:4px;"></td></tr>`;
+        }
+        if (ev.summary) {
+            html += `<tr><td style="border:1px solid #ddd;padding:4px;">Summary</td><td style="border:1px solid #ddd;padding:4px;">-</td><td style="border:1px solid #ddd;padding:4px;">${ev.summary}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        contentDiv.innerHTML = html;
+        messageDiv.appendChild(contentDiv);
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    } catch (error) {
+        console.error('Evaluation error:', error);
+        addMessage('system', `❌ Evaluation failed: ${error.message}`);
+    } finally {
+        setBusy(false);
     }
 }

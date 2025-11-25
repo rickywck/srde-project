@@ -23,6 +23,7 @@ from agents.segmentation_agent import create_segmentation_agent
 from tools.retrieval_tool import create_retrieval_tool
 from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
+from agents.evaluation_agent import create_evaluation_agent
 
 app = FastAPI(title="Backlog Synthesizer POC")
 
@@ -456,6 +457,91 @@ async def generate_backlog(run_id: str):
     except Exception as e:
         save_chat_history(run_id, "system", f"❌ Workflow failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Workflow failed: {str(e)}")
+
+@app.post("/evaluate/{run_id}")
+async def evaluate_backlog(run_id: str):
+    """Run evaluation agent on the generated backlog for a run."""
+    try:
+        run_dir = get_run_dir(run_id)
+        backlog_file = run_dir / "generated_backlog.jsonl"
+        raw_file = run_dir / "raw.txt"
+        segments_file = run_dir / "segments.jsonl"
+
+        if not backlog_file.exists():
+            raise HTTPException(status_code=404, detail="No generated backlog found for this run")
+
+        # Load generated backlog items
+        generated_items: List[Dict[str, Any]] = []
+        with open(backlog_file, "r") as bf:
+            for line in bf:
+                if line.strip():
+                    try:
+                        generated_items.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        if not generated_items:
+            raise HTTPException(status_code=400, detail="Backlog file is empty or invalid")
+
+        # Derive a representative segment text: use first segment if available, else raw doc head
+        segment_text = ""
+        if segments_file.exists():
+            with open(segments_file, "r") as sf:
+                first_line = sf.readline()
+                if first_line.strip():
+                    try:
+                        seg_obj = json.loads(first_line)
+                        segment_text = seg_obj.get("raw_text", "")
+                    except json.JSONDecodeError:
+                        segment_text = ""
+        if not segment_text and raw_file.exists():
+            segment_text = raw_file.read_text()[:4000]
+
+        # Minimal retrieved context (not persisted yet) - could be enhanced later
+        retrieved_context = {"ado_items": [], "architecture_constraints": []}
+
+        # Prepare evaluation agent
+        evaluation_tool = create_evaluation_agent(run_id)
+        payload = {
+            "segment_text": segment_text,
+            "retrieved_context": retrieved_context,
+            "generated_backlog": generated_items,
+            "evaluation_mode": "live"
+        }
+        eval_result = json.loads(evaluation_tool(json.dumps(payload)))
+
+        if eval_result.get("status") not in ("success", "success_mock"):
+            raise HTTPException(status_code=500, detail=eval_result.get("error", "Evaluation failed"))
+
+        # Save summary line to chat history
+        evaluation = eval_result.get("evaluation", {})
+        summary_lines = [
+            "🧪 Evaluation Results",
+            f"Completeness: {evaluation.get('completeness', {}).get('score')} - {evaluation.get('completeness', {}).get('reasoning','')[:120]}",
+            f"Relevance: {evaluation.get('relevance', {}).get('score')} - {evaluation.get('relevance', {}).get('reasoning','')[:120]}",
+            f"Quality: {evaluation.get('quality', {}).get('score')} - {evaluation.get('quality', {}).get('reasoning','')[:120]}",
+            f"Overall: {evaluation.get('overall_score')}",
+        ]
+        suggestions = evaluation.get("suggestions", [])
+        if suggestions:
+            summary_lines.append("Suggestions:")
+            for s in suggestions[:5]:
+                summary_lines.append(f"- {s}")
+        save_chat_history(run_id, "assistant", "\n".join(summary_lines))
+
+        return {
+            "run_id": run_id,
+            "status": eval_result.get("status"),
+            "items_evaluated": eval_result.get("items_evaluated"),
+            "evaluation": evaluation,
+            "raw": eval_result,
+            "timestamp": eval_result.get("timestamp")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        save_chat_history(run_id, "system", f"❌ Evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 @app.get("/runs")
 async def list_runs():
