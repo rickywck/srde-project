@@ -8,7 +8,8 @@ Input contract (JSON passed as string to tool):
   "story": {
     "title": str,
     "description": str,
-    "acceptance_criteria": [str]
+    "acceptance_criteria": [str],
+    "internal_id": str (optional, for tracking)
   },
   "similar_existing_stories": [
      {"work_item_id": str|int, "title": str, "description": str, "similarity": float}, ...
@@ -26,7 +27,9 @@ Output contract (JSON string):
   "early_exit": bool,
   "similarity_threshold": float,
   "similar_count": int,
-  "model_used": str
+  "model_used": str,
+  "story_internal_id": str,
+  "story_title": str
 }
 """
 
@@ -34,6 +37,7 @@ import json
 import os
 import re
 from typing import List, Dict, Any
+from pathlib import Path
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
 from .prompt_loader import get_prompt_loader
@@ -118,10 +122,29 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
     @tool
     def tag_story(story_data: str) -> str:
         """Tag a user story relative to existing backlog (new/gap/conflict)."""
+        
+        def _finalize(result: Dict[str, Any], internal_id: Any = None, title: str = None) -> str:
+            if internal_id:
+                result["story_internal_id"] = internal_id
+            if title:
+                result["story_title"] = title
+            
+            # Persist result to file
+            try:
+                out_dir = Path(f"runs/{run_id}")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                tag_file = out_dir / "tagging.jsonl"
+                with open(tag_file, "a") as f:
+                    f.write(json.dumps(result) + "\n")
+            except Exception:
+                pass # Silently fail on logging errors to preserve flow
+                
+            return json.dumps(result)
+
         try:
             payload = json.loads(story_data)
         except Exception as e:
-            return json.dumps({
+            return _finalize({
                 "status": "error",
                 "run_id": run_id,
                 "decision_tag": "new",
@@ -136,11 +159,13 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
         story = payload.get("story", {})
         similar = payload.get("similar_existing_stories", [])
         threshold = float(payload.get("similarity_threshold", default_similarity_threshold))
+        internal_id = story.get("internal_id")
+        title = story.get("title")
 
         # Early exit if no similar above threshold
         above_threshold = [s for s in similar if s.get("similarity", 0.0) >= threshold]
         if not above_threshold:
-            return json.dumps({
+            return _finalize({
                 "status": "ok",
                 "run_id": run_id,
                 "decision_tag": "new",
@@ -150,7 +175,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
                 "similarity_threshold": threshold,
                 "similar_count": 0,
                 "model_used": model_id
-            })
+            }, internal_id, title)
 
         # Build prompt for LLM using template
         ac_list = story.get("acceptance_criteria", []) or []
@@ -180,7 +205,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
         if not parsed or not isinstance(parsed, dict) or "decision_tag" not in parsed:
             # Fallback to rule-based
             fallback = _rule_based_fallback(story, above_threshold, threshold)
-            return json.dumps({
+            return _finalize({
                 "status": "ok",
                 "run_id": run_id,
                 "decision_tag": fallback.get("decision_tag", "new"),
@@ -191,7 +216,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
                 "similar_count": len(above_threshold),
                 "model_used": model_id,
                 "fallback_used": True
-            })
+            }, internal_id, title)
 
         # Clean / normalize parsed output
         decision = parsed.get("decision_tag", "new").lower()
@@ -202,7 +227,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
             related_ids = []
         reason = parsed.get("reason", "")[:200]
 
-        return json.dumps({
+        return _finalize({
             "status": "ok",
             "run_id": run_id,
             "decision_tag": decision,
@@ -213,7 +238,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
             "similar_count": len(above_threshold),
             "model_used": model_id,
             "fallback_used": False
-        })
+        }, internal_id, title)
 
     return tag_story
 

@@ -22,7 +22,21 @@ from tools.retrieval_tool import create_retrieval_tool
 from tools.ado_writer_tool import create_ado_writer_tool
 from agents.evaluation_agent import create_evaluation_agent
 from agents.prompt_loader import get_prompt_loader
+import base64
 
+# Build Basic Auth header.
+LANGFUSE_AUTH = base64.b64encode(
+    f"{os.environ.get('LANGFUSE_PUBLIC_KEY')}:{os.environ.get('LANGFUSE_SECRET_KEY')}".encode()
+).decode()
+ 
+# Configure OpenTelemetry endpoint & headers
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = os.environ.get("LANGFUSE_BASE_URL") + "/api/public/otel"
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {LANGFUSE_AUTH}"
+#os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:4318"
+
+# Configure the telemetry
+# (Creates new tracer provider and sets it as global)
+strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
 
 class SupervisorAgent:
     """

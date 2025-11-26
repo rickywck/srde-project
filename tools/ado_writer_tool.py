@@ -418,6 +418,7 @@ def create_ado_writer_tool(run_id: str):
 
         # Load tagging decisions (map by any available synthetic id or title fallback)
         story_tag_map: Dict[str, str] = {}
+        tagging_records: List[Dict[str, Any]] = []
         if tagging_path.exists():
             with open(tagging_path, "r") as f:
                 for line in f:
@@ -426,12 +427,28 @@ def create_ado_writer_tool(run_id: str):
                         continue
                     try:
                         rec = json.loads(line)
+                        tagging_records.append(rec)
                     except Exception:
                         continue
                     # Use story_internal_id as primary key for matching with backlog items
-                    key = rec.get("story_internal_id") or rec.get("story_id") or rec.get("id") or rec.get("title")
+                    key = rec.get("story_internal_id") or rec.get("story_id") or rec.get("id") or rec.get("story_title") or rec.get("title")
                     if key:
                         story_tag_map[str(key)] = rec.get("decision_tag")
+        
+        # Positional matching fallback:
+        # If explicit matching (via IDs/titles) didn't populate the map adequately,
+        # and we have tagging records that lack identification, assume 1:1 mapping with stories.
+        stories_in_backlog = [
+            item for item in backlog_items 
+            if (item.get("type") or item.get("work_item_type") or "").lower() in ("story", "user story")
+        ]
+        
+        if not story_tag_map and len(tagging_records) == len(stories_in_backlog):
+            # Fallback: Assume sequential correspondence
+            for story, tag_rec in zip(stories_in_backlog, tagging_records):
+                key = story.get("internal_id") or story.get("story_id") or story.get("id") or story.get("title")
+                if key:
+                    story_tag_map[str(key)] = tag_rec.get("decision_tag")
 
         # Index backlog items by possible keys to help parent-child resolution
         by_internal_ids = {}

@@ -205,44 +205,25 @@ class BacklogSynthesisWorkflow:
         self.log_progress(f"Stage 4: Tagging {len(stories)} stories")
         
         tagging_tool = create_tagging_agent(self.run_id)
-        tagging_file = self.run_dir / "tagging.jsonl"
         
         for story in stories:
             # Retrieve similar existing stories
             similar_stories = self._find_similar_stories(story)
             
-            if not similar_stories:
-                # Early exit: no similar stories above threshold
-                tagging_output = {
-                    "status": "ok",
-                    "run_id": self.run_id,
-                    "decision_tag": "new",
-                    "related_ids": [],
-                    "reason": "No similar existing stories found (all below threshold)",
-                    "early_exit": True,
-                    "similarity_threshold": self.min_similarity,
-                    "similar_count": 0,
-                    "story_internal_id": story.get("internal_id")
-                }
-            else:
-                # Call tagging agent
-                tag_payload = {
-                    "story": {
-                        "title": story.get("title"),
-                        "description": story.get("description"),
-                        "acceptance_criteria": story.get("acceptance_criteria", [])
-                    },
-                    "similar_existing_stories": similar_stories,
-                    "similarity_threshold": self.min_similarity
-                }
-                tagging_output = json.loads(tagging_tool(json.dumps(tag_payload)))
-                tagging_output["story_internal_id"] = story.get("internal_id")
+            # Call tagging agent (handles persistence internally)
+            tag_payload = {
+                "story": {
+                    "title": story.get("title"),
+                    "description": story.get("description"),
+                    "acceptance_criteria": story.get("acceptance_criteria", []),
+                    "internal_id": story.get("internal_id")
+                },
+                "similar_existing_stories": similar_stories,
+                "similarity_threshold": self.min_similarity
+            }
+            tagging_output = json.loads(tagging_tool(json.dumps(tag_payload)))
             
             self.results["tagging"].append(tagging_output)
-            
-            # Save to file
-            with open(tagging_file, "a") as tf:
-                tf.write(json.dumps(tagging_output) + "\n")
         
         tag_counts = {}
         for rec in self.results["tagging"]:
