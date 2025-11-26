@@ -442,9 +442,17 @@ async function sendMessage() {
         }
         
         const data = await response.json();
-        
-        // Add assistant response
-        addMessage('assistant', data.response);
+
+        // If supervisor signals backlog was generated, fetch and display it
+        if (data && data.response_type === 'backlog_generated') {
+            if (data.response) {
+                addMessage('assistant', data.response);
+            }
+            await loadBacklog();
+        } else {
+            // Default assistant text response
+            addMessage('assistant', data.response);
+        }
         
         // Clear chat attachment after successful send
         if (chatAttachedDocument) {

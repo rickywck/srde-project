@@ -52,6 +52,8 @@ class ChatResponse(BaseModel):
     response: str
     status: Dict[str, Any]
     timestamp: str
+    # Optional UI hint to render structured content (e.g., backlog)
+    response_type: Optional[str] = None
 
 class UploadResponse(BaseModel):
     run_id: str
@@ -225,7 +227,8 @@ async def chat(run_id: str, message: ChatMessage):
             run_id=run_id,
             response=response["response"],
             status=response.get("status", {}),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.utcnow().isoformat(),
+            response_type=response.get("response_type")
         )
     
     except HTTPException:

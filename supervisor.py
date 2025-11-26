@@ -110,6 +110,14 @@ class SupervisorAgent:
 
         self.current_run_id = run_id
 
+        # Track backlog file state before processing to detect new generation
+        runs_dir = Path("runs")
+        run_dir = runs_dir / run_id
+        backlog_file = run_dir / "generated_backlog.jsonl"
+        backlog_existed_before = backlog_file.exists()
+        backlog_mtime_before = backlog_file.stat().st_mtime if backlog_existed_before else None
+        backlog_size_before = backlog_file.stat().st_size if backlog_existed_before else None
+
         # Setup session manager for this run
         session_manager = FileSessionManager(
             session_id=run_id,
@@ -173,7 +181,7 @@ class SupervisorAgent:
             response = await asyncio.to_thread(agent, full_query)
             assistant_message = str(response)
             conversation_length = len(agent.messages) if hasattr(agent, "messages") else None
-            return {
+            result: Dict[str, Any] = {
                 "response": assistant_message,
                 "status": {
                     "run_id": run_id,
@@ -193,6 +201,19 @@ class SupervisorAgent:
                     "tools_invoked": getattr(response, 'tool_calls', []) if hasattr(response, 'tool_calls') else []
                 }
             }
+
+            # Detect if backlog was generated/updated during this message handling
+            try:
+                if backlog_file.exists():
+                    mtime_after = backlog_file.stat().st_mtime
+                    size_after = backlog_file.stat().st_size
+                    if (not backlog_existed_before) or (mtime_after != backlog_mtime_before) or (size_after != backlog_size_before):
+                        result["response_type"] = "backlog_generated"
+            except Exception:
+                # Non-fatal; ignore detection errors
+                pass
+
+            return result
         except Exception as e:
             return {
                 "response": f"I encountered an error processing your request: {str(e)}",
