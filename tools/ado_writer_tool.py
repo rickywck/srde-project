@@ -343,7 +343,7 @@ def create_ado_writer_tool(run_id: str):
     The tool accepts a JSON string with fields:
     - run_id: optional (defaults to the bound run_id)
     - filter_tags: list[str] (default ["new", "gap"]) applied to Story tags
-    - dry_run: bool (default True)
+    - dry_run: bool (default False)
     """
 
     # Load configuration (reuse retrieval style)
@@ -367,6 +367,18 @@ def create_ado_writer_tool(run_id: str):
 
     @tool
     def write_to_ado(params_json: str) -> str:
+        """
+        Writes the generated backlog items to Azure DevOps (ADO).
+        
+        Args:
+            params_json: A JSON string containing:
+                - run_id (str, optional): The run ID to export. Defaults to current run.
+                - filter_tags (List[str], optional): Tags to filter stories by (e.g., ["new", "gap"]).
+                - dry_run (bool, optional): If True, returns a plan without writing to ADO. Defaults to False.
+        
+        Returns:
+            JSON string with the result of the operation.
+        """
         try:
             params = json.loads(params_json or "{}")
         except json.JSONDecodeError as e:
@@ -378,7 +390,7 @@ def create_ado_writer_tool(run_id: str):
 
         effective_run_id: str = params.get("run_id") or run_id
         filter_tags: List[str] = params.get("filter_tags") or ["new", "gap"]
-        dry_run: bool = params.get("dry_run", True)
+        dry_run: bool = params.get("dry_run", False)
 
         run_dir = Path("runs") / effective_run_id
         backlog_path = run_dir / "generated_backlog.jsonl"
