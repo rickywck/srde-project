@@ -9,3 +9,4 @@ runs/
 test_runs/
 agents/__pycache__
 agents/.DS_Store
+sessions/
