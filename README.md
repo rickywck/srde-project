@@ -14,39 +14,52 @@ The RDE system uses a supervisor-coordinated multi-agent architecture to:
 
 ## Architecture
 
-### Multi-Agent System
+### Multi-Agent System & Session Management
 
-- **Supervisor Agent**: Orchestrates workflow and routes user requests to specialized agents
-- **Segmentation Agent**: Analyzes documents and breaks them into semantic sections with intent labels
-- **Backlog Generation Agent**: Creates Epics/Features/Stories from segments using RAG retrieval
-- **Tagging Agent**: Classifies stories as gap/conflict/new relative to existing backlog
-- **Evaluation Agent**: Assesses completeness, relevance, and quality of generated backlog
+- **Supervisor Agent**: Orchestrates workflow, manages agent cache by `run_id`, and routes user requests to specialized agents. Ensures conversation continuity via session management.
+- **Segmentation Agent**: Analyzes documents and breaks them into semantic sections with intent labels.
+- **Backlog Generation Agent**: Creates Epics/Features/Stories from segments using RAG retrieval.
+- **Tagging Agent**: Classifies stories as gap/conflict/new relative to existing backlog.
+- **Evaluation Agent**: Assesses completeness, relevance, and quality of generated backlog.
+
+#### Session Management Design
+
+The system uses a **FileSessionManager** and agent caching to maintain conversation history and agent state across requests. Each chat session is identified by a unique `run_id`:
+
+- **Single Agent Instance per run_id**: Ensures context continuity for each conversation.
+- **FileSessionManager**: Automatically persists agent state and messages to disk (`sessions/session_{run_id}/`).
+- **agents_cache**: Supervisor caches agents in memory for efficient reuse.
+- **Session Restoration**: Sessions survive server restarts and can be restored from disk.
+- **Frontend Integration**: Frontend must maintain and reuse `run_id` for all messages in a session (see `docs/FRONTEND_SESSION_GUIDE.md`).
+
+See [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md) and [`docs/FRONTEND_SESSION_GUIDE.md`](docs/FRONTEND_SESSION_GUIDE.md) for full design and integration details.
 
 ### Workflow Orchestration
 
-The system provides two workflow implementations for backlog generation:
+Two workflow implementations for backlog generation:
 
 1. **BacklogSynthesisWorkflow** (Custom Sequential)
-   - Explicit control over workflow stages with clear dependency management
-   - Sequential execution: segment → retrieve → generate → tag → evaluate
-   - Lazy initialization of expensive resources (OpenAI, Pinecone clients)
-   - Ideal for debugging, development, and simple documents
+  - Explicit control over workflow stages with clear dependency management
+  - Sequential execution: segment → retrieve → generate → tag → evaluate
+  - Lazy initialization of expensive resources (OpenAI, Pinecone clients)
+  - Ideal for debugging, development, and simple documents
 
 2. **StrandsBacklogWorkflow** (Strands Native)
-   - Automatic dependency resolution and parallel execution where possible
-   - Built-in retry logic with exponential backoff
-   - Progress monitoring, pause/resume capabilities
-   - Best for production, large documents, and complex workflows
+  - Automatic dependency resolution and parallel execution where possible
+  - Built-in retry logic with exponential backoff
+  - Progress monitoring, pause/resume capabilities
+  - Best for production, large documents, and complex workflows
 
 Both workflows are externalized from the FastAPI layer into dedicated `workflows/` modules, providing clean separation between UI, orchestration, and agent logic.
 
 ### Technology Stack
 
-- **Framework**: AWS Strands for multi-agent orchestration
+
+- **Framework**: AWS Strands for multi-agent orchestration and session management
 - **Backend**: FastAPI with async support
-- **LLM**: OpenAI GPT-4o for reasoning, text-embedding-3-small for embeddings
+- **LLM**: OpenAI GPT-4o (configurable via UI and backend), text-embedding-3-small for embeddings
 - **Vector Store**: Pinecone (serverless, 512-dim embeddings)
-- **Frontend**: HTML/CSS/JavaScript chat interface
+- **Frontend**: HTML/CSS/JavaScript chat interface with session-aware chat and model picker
 - **Prompt Management**: YAML-based external configuration with centralized loader
 - **Workflow Orchestration**: Externalized workflow modules with Strands integration
 
@@ -355,9 +368,15 @@ Two workflow implementations provide flexibility:
 - Intent-based filtering for relevant context
 
 ### Session Management
-- Each chat session gets unique `run_id`
-- State persisted in `runs/{run_id}/` directory
-- Supports iterative refinement and follow-up questions
+
+### Session Management (Strands)
+- **Conversation Continuity**: Each chat session uses a unique `run_id` for context continuity.
+- **Automatic Persistence**: Agent state and messages are auto-saved to `sessions/session_{run_id}/`.
+- **Agent Caching**: Supervisor caches agents by `run_id` for efficient reuse.
+- **Crash Recovery**: Sessions persist across server restarts and can be restored from disk.
+- **Frontend Integration**: Frontend must maintain and reuse `run_id` for all messages in a session. See [`docs/FRONTEND_SESSION_GUIDE.md`](docs/FRONTEND_SESSION_GUIDE.md).
+- **Multi-Turn Conversations**: Natural follow-up questions work; tool context is remembered.
+- **Per-Session Isolation**: Each `run_id` has independent history.
 
 ### Evaluation Framework
 - Synthetic dataset generation for tagging validation
@@ -403,25 +422,13 @@ project:
 - Or export variables in your shell: `export ADO_PAT=your_token`
 - Ensure variables are exported (not just set): `export -p | grep ADO_PAT`
 
-### Loader Scripts Fail to Import
-- Loaders moved to `ingestion/` directory
-- Scripts automatically resolve paths to parent directory for config and modules
-- Run from project root: `python ingestion/ado_loader.py`
 
-### No Results from RAG Search
-- Verify data loaded: Check Pinecone dashboard for vectors
-- Lower similarity threshold in `config.poc.yaml`
-- Ensure namespace matches `project.name` in config
+### Session Management Issues
+- **Agent doesn't remember previous messages**: Ensure same `run_id` is used for all messages; check `session_managed: true` in response status.
+- **Conversation resets unexpectedly**: Verify `run_id` is not overwritten; sessionStorage/localStorage is not cleared.
+- **Multiple conversations mixed together**: Use unique `run_id` for each conversation; do not reuse old `run_id`s.
 
-### Chat Interface Not Loading
-- Check FastAPI is running on `http://localhost:8000`
-- Verify static files in `static/` directory
-- Check browser console for JavaScript errors
-
-### Agent Errors
-- Verify all prompts exist in `prompts/` directory
-- Check YAML syntax (indentation, structure)
-- Review agent logs in terminal output
+See [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md) and [`docs/FRONTEND_SESSION_GUIDE.md`](docs/FRONTEND_SESSION_GUIDE.md) for troubleshooting and integration tips.
 
 ## API Endpoints
 
