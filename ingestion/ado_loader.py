@@ -278,8 +278,8 @@ def main():
     # Get parameters (CLI overrides config)
     organization = args.organization or config['ado']['organization']
     project = args.project or config['ado']['project']
-    # Unified namespace used by searcher (config.project.name)
-    unified_namespace = config.get('project', {}).get('name', project)
+    # Unified namespace used by loaders if needed (moved under pinecone.project)
+    unified_namespace = config.get('pinecone', {}).get('project', project)
     
     # Get secrets from environment
     pat = os.getenv(config['ado']['pat_env_var'])

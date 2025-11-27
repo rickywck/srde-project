@@ -237,8 +237,8 @@ def main():
     # Load configuration
     config = load_config(args.config)
     
-    # Use project from args or fall back to config
-    project = args.project or config.get('project', {}).get('name')
+    # Use project from args or fall back to config (moved under pinecone.project)
+    project = args.project or config.get('pinecone', {}).get('project')
     if not project:
         print("Error: Project name not specified and not found in config file")
         sys.exit(1)

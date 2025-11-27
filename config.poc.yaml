@@ -7,14 +7,20 @@ pinecone:
   api_key_env_var: PINECONE_API_KEY
   index_name: rde-lab
   environment: us-east-1
+  project: poc
 
 openai:
   api_key_env_var: OPENAI_API_KEY
   embedding_model: text-embedding-3-small
   chat_model: gpt-4o
+  embedding_dimensions: 512
 
 retrieval:
-  min_similarity_threshold: 0.5
+  ado:
+    top_k: 15
+    min_similarity_threshold: 0.5
+  architecture:
+    top_k: 10
+    min_similarity_threshold: 0.5
 
-project:
-  name: poc
+project: {}
