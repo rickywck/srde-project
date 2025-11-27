@@ -114,6 +114,16 @@ class BacklogSynthesisWorkflow:
         """
         self.log_progress("🚀 Starting backlog synthesis workflow")
         
+        # Clear previous run artifacts to ensure fresh state
+        for filename in ["generated_backlog.jsonl", "tagging.jsonl", "segments.jsonl", "evaluation.jsonl"]:
+            fpath = self.run_dir / filename
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                    self.log_progress(f"Cleared previous {filename}", save_to_history=False)
+                except Exception as e:
+                    self.log_progress(f"⚠ Failed to clear {filename}: {e}", save_to_history=False)
+        
         try:
             # Stage 1: Segmentation
             segments = await self._stage_segmentation(document_text)
