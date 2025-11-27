@@ -790,8 +790,14 @@ async function loadTagging() {
                 '</tr></thead><tbody>';
             for (let i = 0; i < data.items.length; i++) {
                 const rec = data.items[i];
-                const story = backlogMap[rec.story_internal_id] || {};
-                const title = story.title || rec.story_internal_id || '';
+                let title = '';
+                if (rec.story_internal_id && backlogMap[rec.story_internal_id] && backlogMap[rec.story_internal_id].title) {
+                    title = backlogMap[rec.story_internal_id].title;
+                } else if (rec.story_title) {
+                    title = rec.story_title;
+                } else if (rec.story_internal_id) {
+                    title = rec.story_internal_id;
+                }
                 const fullReason = rec.reason || '';
                 const reason = fullReason.slice(0,180) + (fullReason.length > 180 ? '…' : '');
                 html += '<tr>' +

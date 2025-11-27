@@ -196,7 +196,7 @@ class BacklogSynthesisWorkflow:
                 if line.strip():
                     generated_items.append(json.loads(line))
         
-        stories = [i for i in generated_items if i.get("type", "").lower() == "story"]
+        stories = [i for i in generated_items if i.get("type", "").lower() == "user story"]
         
         if not stories:
             self.log_progress("⚠ No stories found, skipping tagging")
@@ -361,7 +361,7 @@ class BacklogSynthesisWorkflow:
                     if line.strip():
                         generated_items.append(json.loads(line))
         
-        stories = [i for i in generated_items if i.get("type", "").lower() == "story"]
+        stories = [i for i in generated_items if i.get("type", "").lower() == "user story"]
         
         # Tag distribution
         tag_counts = {}

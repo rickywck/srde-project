@@ -22,6 +22,7 @@ from tools.ado_writer_tool import create_ado_writer_tool
 from agents.evaluation_agent import create_evaluation_agent
 from agents.prompt_loader import get_prompt_loader
 import base64
+from tools.token_utils import estimate_tokens
 
 # Build Basic Auth header.
 LANGFUSE_AUTH = base64.b64encode(
@@ -197,6 +198,9 @@ class SupervisorAgent:
 
         try:
             # Run agent in thread for async compatibility
+            # Print approximate input tokens for debugging
+            approx_inp_tokens = estimate_tokens(full_query)
+            print(f"Supervisor: input tokens approx={approx_inp_tokens}")
             response = await asyncio.to_thread(agent, full_query)
             assistant_message = str(response)
             conversation_length = len(agent.messages) if hasattr(agent, "messages") else None

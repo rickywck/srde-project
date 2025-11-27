@@ -42,27 +42,39 @@ def create_retrieval_tool(run_id: str):
     pc = Pinecone(api_key=pinecone_api_key) if pinecone_api_key else None
     
     embedding_model = config.get("openai", {}).get("embedding_model", "text-embedding-3-small")
-    embedding_dimensions = config.get("openai", {}).get("embedding_dimensions", 512)
+    # Sanitize numeric config values
+    def _as_int(v, default):
+        try:
+            i = int(v)
+            return i if i > 0 else default
+        except Exception:
+            return default
+    def _as_float(v, default):
+        try:
+            return float(v)
+        except Exception:
+            return default
+    embedding_dimensions = _as_int(config.get("openai", {}).get("embedding_dimensions", 512), 512)
     index_name = config.get("pinecone", {}).get("index_name", "rde-lab")
-    namespace = config.get("pinecone", {}).get("project")
+    namespace = (config.get("pinecone", {}).get("project") or "").strip()
     # Per-source retrieval settings with back-compat fallback
-    ado_top_k = (
-        config.get("retrieval", {}).get("ado", {}).get("top_k", 10)
+    ado_top_k = _as_int(
+        config.get("retrieval", {}).get("ado", {}).get("top_k", 10), 10
     )
-    arch_top_k = (
-        config.get("retrieval", {}).get("architecture", {}).get("top_k", 5)
+    arch_top_k = _as_int(
+        config.get("retrieval", {}).get("architecture", {}).get("top_k", 5), 5
     )
-    ado_min_similarity = (
+    ado_min_similarity = _as_float(
         config.get("retrieval", {}).get("ado", {}).get(
             "min_similarity_threshold",
             config.get("retrieval", {}).get("min_similarity_threshold", 0.5)
-        )
+        ), 0.5
     )
-    arch_min_similarity = (
+    arch_min_similarity = _as_float(
         config.get("retrieval", {}).get("architecture", {}).get(
             "min_similarity_threshold",
             config.get("retrieval", {}).get("min_similarity_threshold", 0.5)
-        )
+        ), 0.5
     )
     
     @tool
@@ -129,13 +141,15 @@ def create_retrieval_tool(run_id: str):
                 return mid, mscore, mmeta
 
             def _query_ado():
-                res = index.query(
-                    vector=query_vector,
-                    top_k=ado_top_k,
-                    namespace=namespace,
-                    include_metadata=True,
-                    filter={"doc_type": {"$eq": "ado_backlog"}}
-                )
+                query_kwargs = {
+                    "vector": query_vector,
+                    "top_k": ado_top_k,
+                    "include_metadata": True,
+                    "filter": {"doc_type": {"$eq": "ado_backlog"}}
+                }
+                if namespace:
+                    query_kwargs["namespace"] = namespace
+                res = index.query(**query_kwargs)
                 items = []
                 for match in _coerce_matches(res):
                     mid, mscore, mmeta = _coerce_fields(match)
@@ -151,7 +165,7 @@ def create_retrieval_tool(run_id: str):
                         })
                 return items
 
-            print("Retrieval Tool: Querying Pinecone for ADO items...")
+            print(f"Retrieval Tool: Querying Pinecone for ADO items... (namespace='{namespace or 'default'}')")
             ado_items = _query_ado()
             if not ado_items:
                 print(f"Retrieval Tool: No ADO matches (doc_type='ado_backlog', threshold={ado_min_similarity}).")
@@ -159,13 +173,15 @@ def create_retrieval_tool(run_id: str):
             print(f"Retrieval Tool: Found {len(ado_items)} relevant ADO items")
 
             print("Retrieval Tool: Querying Pinecone for architecture constraints...")
-            arch_results = index.query(
-                vector=query_vector,
-                top_k=arch_top_k,
-                namespace=namespace,
-                include_metadata=True,
-                filter={"doc_type": {"$eq": "architecture"}}
-            )
+            arch_query_kwargs = {
+                "vector": query_vector,
+                "top_k": arch_top_k,
+                "include_metadata": True,
+                "filter": {"doc_type": {"$eq": "architecture"}}
+            }
+            if namespace:
+                arch_query_kwargs["namespace"] = namespace
+            arch_results = index.query(**arch_query_kwargs)
 
             architecture_items = []
             for match in _coerce_matches(arch_results):
@@ -205,20 +221,44 @@ def create_retrieval_tool(run_id: str):
             return json.dumps(result, indent=2)
             
         except json.JSONDecodeError as e:
-            error_result = {
-                "status": "error",
-                "error": f"Failed to parse query_data JSON: {str(e)}",
-                "run_id": run_id
+            # Fail open: proceed with empty context but include warning
+            warn = f"Failed to parse query_data JSON: {str(e)}"
+            fallback = {
+                "status": "success",
+                "run_id": run_id,
+                "segment_id": 0,
+                "retrieval_summary": {
+                    "ado_items_count": 0,
+                    "architecture_items_count": 0,
+                    "ado_min_similarity_threshold": ado_min_similarity,
+                    "arch_min_similarity_threshold": arch_min_similarity,
+                    "warning": warn
+                },
+                "ado_items": [],
+                "architecture_constraints": [],
+                "query_info": {}
             }
-            return json.dumps(error_result, indent=2)
+            return json.dumps(fallback, indent=2)
         
         except Exception as e:
-            error_result = {
-                "status": "error",
-                "error": f"Retrieval failed: {str(e)}",
-                "run_id": run_id
+            # Fail open: proceed with empty context but include warning
+            warn = f"Retrieval failed: {str(e)}"
+            fallback = {
+                "status": "success",
+                "run_id": run_id,
+                "segment_id": 0,
+                "retrieval_summary": {
+                    "ado_items_count": 0,
+                    "architecture_items_count": 0,
+                    "ado_min_similarity_threshold": ado_min_similarity,
+                    "arch_min_similarity_threshold": arch_min_similarity,
+                    "warning": warn
+                },
+                "ado_items": [],
+                "architecture_constraints": [],
+                "query_info": {}
             }
-            return json.dumps(error_result, indent=2)
+            return json.dumps(fallback, indent=2)
     
     return retrieve_context
 

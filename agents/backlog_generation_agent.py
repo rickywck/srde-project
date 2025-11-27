@@ -10,6 +10,7 @@ from pathlib import Path
 from openai import OpenAI
 from strands import tool
 from .prompt_loader import get_prompt_loader
+from tools.token_utils import estimate_tokens
 
 
 def create_backlog_generation_agent(run_id: str):
@@ -25,7 +26,7 @@ def create_backlog_generation_agent(run_id: str):
     
     # Get OpenAI configuration
     api_key = os.getenv("OPENAI_API_KEY")
-    # Load default model from config, allow env override
+    # Load defaults from config, allow env override
     config_path = "config.poc.yaml"
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
@@ -33,6 +34,20 @@ def create_backlog_generation_agent(run_id: str):
     else:
         _cfg = {"openai": {"chat_model": "gpt-4o"}}
     model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
+
+    # Generation limits from config
+    gen_cfg = _cfg.get("generation", {}) if isinstance(_cfg, dict) else {}
+    def _as_int(v, d):
+        try:
+            i = int(v)
+            return i if i > 0 else d
+        except Exception:
+            return d
+    MAX_ADO = _as_int(gen_cfg.get("max_ado_in_prompt", 6), 6)
+    MAX_ARCH = _as_int(gen_cfg.get("max_arch_in_prompt", 6), 6)
+    ADO_DESC_LEN = _as_int(gen_cfg.get("ado_desc_len", 400), 400)
+    ARCH_TEXT_LEN = _as_int(gen_cfg.get("arch_text_len", 600), 600)
+    CFG_MAX_TOKENS = _as_int(gen_cfg.get("max_tokens", 1500), 1500)
     
     openai_client = OpenAI(api_key=api_key) if api_key else None
     
@@ -70,21 +85,48 @@ def create_backlog_generation_agent(run_id: str):
             print(f"Backlog Generation Agent: Processing segment {segment_id} (run_id: {run_id})")
             
             # Build generation prompt from template
-            ado_items = retrieved_context.get("ado_items", [])
-            arch_constraints = retrieved_context.get("architecture_constraints", [])
+            ado_items = retrieved_context.get("ado_items", []) or []
+            arch_constraints = retrieved_context.get("architecture_constraints", []) or []
+
+            def _safe_score(x):
+                try:
+                    return float(x)
+                except Exception:
+                    return 0.0
+
+            # Sort by score desc when available
+            if ado_items:
+                ado_items = sorted(ado_items, key=lambda i: _safe_score(i.get("score")), reverse=True)[:MAX_ADO]
+            if arch_constraints:
+                arch_constraints = sorted(arch_constraints, key=lambda i: _safe_score(i.get("score")), reverse=True)[:MAX_ARCH]
             
             # Format ADO items
             ado_formatted = "No relevant existing ADO items found.\n" if not ado_items else ""
             for item in ado_items:
-                ado_formatted += f"\n## {item.get('type', 'Item')} (ID: {item.get('work_item_id', 'N/A')}, Similarity: {item.get('score', 0):.2f})\n"
-                ado_formatted += f"**Title:** {item.get('title', 'Untitled')}\n"
-                ado_formatted += f"**Description:** {item.get('description', 'No description')}\n"
+                try:
+                    score_val = _safe_score(item.get('score', 0))
+                    ado_formatted += f"\n## {item.get('type', 'Item')} (ID: {item.get('work_item_id', 'N/A')}, Similarity: {score_val:.2f})\n"
+                    ado_formatted += f"**Title:** {item.get('title', 'Untitled')}\n"
+                    desc = item.get('description', '') or ''
+                    if len(desc) > ADO_DESC_LEN:
+                        desc = desc[:ADO_DESC_LEN] + "…"
+                    ado_formatted += f"**Description:** {desc or 'No description'}\n"
+                except Exception:
+                    # Skip any malformed item
+                    continue
             
             # Format architecture constraints
             arch_formatted = "No relevant architecture constraints found.\n" if not arch_constraints else ""
             for constraint in arch_constraints:
-                arch_formatted += f"\n## From {constraint.get('source', 'Unknown')} - {constraint.get('section', '')} (Similarity: {constraint.get('score', 0):.2f})\n"
-                arch_formatted += f"{constraint.get('text', 'No text')}\n"
+                try:
+                    score_val = _safe_score(constraint.get('score', 0))
+                    arch_formatted += f"\n## From {constraint.get('source', 'Unknown')} - {constraint.get('section', '')} (Similarity: {score_val:.2f})\n"
+                    textv = constraint.get('text', '') or ''
+                    if len(textv) > ARCH_TEXT_LEN:
+                        textv = textv[:ARCH_TEXT_LEN] + "…"
+                    arch_formatted += f"{textv or 'No text'}\n"
+                except Exception:
+                    continue
             
             prompt = prompt_loader.format_user_prompt(
                 "backlog_generation_agent",
@@ -94,15 +136,23 @@ def create_backlog_generation_agent(run_id: str):
                 ado_items_formatted=ado_formatted,
                 architecture_constraints_formatted=arch_formatted
             )
+
+            # Approx token counts for debugging
+            sys_tok = estimate_tokens(system_prompt)
+            usr_tok = estimate_tokens(prompt)
+            approx_total = sys_tok + usr_tok
+            print(f"Backlog Generation Agent: tokens approx — system={sys_tok}, user={usr_tok}, total≈{approx_total}")
             
             # Check if we have OpenAI client
             if not openai_client:
                 print("Backlog Generation Agent: Using MOCK mode (missing OPENAI_API_KEY)")
                 return _mock_generation(segment_id, segment_text, intent_labels, run_id)
             
-            print(f"Backlog Generation Agent: Calling LLM to generate backlog items...")
+            print("Backlog Generation Agent: Calling LLM to generate backlog items...")
             
             # Call LLM
+            # Respect prompt parameter defaults, cap by config if provided
+            eff_max_tokens = min(params.get("max_tokens", 2000), CFG_MAX_TOKENS) if CFG_MAX_TOKENS else params.get("max_tokens", 2000)
             response = openai_client.chat.completions.create(
                 model=model_name,
                 messages=[
@@ -110,7 +160,7 @@ def create_backlog_generation_agent(run_id: str):
                     {"role": "user", "content": prompt}
                 ],
                 temperature=params.get("temperature", 0.7),
-                max_tokens=params.get("max_tokens", 2000),
+                max_tokens=eff_max_tokens,
                 response_format={"type": params.get("response_format", "json_object")}
             )
             
@@ -127,7 +177,13 @@ def create_backlog_generation_agent(run_id: str):
             # Assign internal IDs
             item_counter = {"epic": 1, "feature": 1, "story": 1}
             for item in backlog_items:
-                item_type = item.get("type", "story").lower()
+                # Normalize type for consistency
+                orig_type = item.get("type", "story")
+                if orig_type.lower() == "story":
+                    item["type"] = "User Story"
+                    item_type = "user story"
+                else:
+                    item_type = orig_type.lower()
                 if item_type in item_counter:
                     item["internal_id"] = f"{item_type}_{segment_id}_{item_counter[item_type]}"
                     item_counter[item_type] += 1
@@ -164,12 +220,9 @@ def create_backlog_generation_agent(run_id: str):
             return json.dumps(summary, indent=2)
             
         except json.JSONDecodeError as e:
-            error_msg = {
-                "status": "error",
-                "error": f"Failed to parse input or LLM response as JSON: {str(e)}",
-                "run_id": run_id
-            }
-            return json.dumps(error_msg, indent=2)
+            # Fallback: use mock generation if LLM JSON is truncated or invalid
+            print(f"Backlog Generation Agent: JSON parse failed, using fallback. Reason: {str(e)}")
+            return _mock_generation(segment_id, segment_text, intent_labels, run_id)
         
         except Exception as e:
             error_msg = {

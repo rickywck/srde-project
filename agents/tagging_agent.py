@@ -170,6 +170,9 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
         internal_id = story.get("internal_id")
         title = story.get("title")
 
+        # Log story title and description for troubleshooting
+        print(f"Tagging Agent: Processing story title='{title}' | description='{story.get('description', '')[:120]}…'")
+
         # Early exit if no similar above threshold
         above_threshold = [s for s in similar if s.get("similarity", 0.0) >= threshold]
         if not above_threshold:
