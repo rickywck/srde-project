@@ -253,7 +253,7 @@ class BacklogSynthesisWorkflow:
             query_res = self.index.query(
                 vector=vec,
                 top_k=10,
-                namespace="ado_items",
+                filter={"doc_type": "ado_backlog"},
                 include_metadata=True
             )
             
