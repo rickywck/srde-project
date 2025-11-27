@@ -4,13 +4,52 @@ Test ADO Writer Tool
 
 import os
 import json
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from tools.ado_writer_tool import create_ado_writer_tool
 
 
+def _write_minimal_backlog(run_id: str):
+    """Create a minimal backlog for the given run to support tests.
+    Structure: Epic A -> Feature A -> Story 1 (assigned_tag=new)
+    """
+    run_dir = Path('runs') / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    backlog_path = run_dir / 'generated_backlog.jsonl'
+    lines = [
+        {
+            "type": "Epic",
+            "title": "Epic A",
+            "description": "Epic description",
+            "internal_id": "E1"
+        },
+        {
+            "type": "Feature",
+            "title": "Feature A",
+            "description": "Feature description",
+            "parent_reference": "Epic A",
+            "internal_id": "F1"
+        },
+        {
+            "type": "User Story",
+            "title": "Story 1",
+            "description": "Story description",
+            "parent_reference": "Feature A",
+            "internal_id": "S1",
+            "assigned_tag": "new",
+            "acceptance_criteria": ["AC1", "AC2"]
+        }
+    ]
+    with backlog_path.open('w', encoding='utf-8') as f:
+        for rec in lines:
+            f.write(json.dumps(rec) + "\n")
+
+
 def test_dry_run():
     """Test dry run mode - should not call ADO API"""
-    tool = create_ado_writer_tool('a5b9d811-7cc7-481f-8cab-6f93619aa42f')
+    run_id = 'a5b9d811-7cc7-481f-8cab-6f93619aa42f'
+    _write_minimal_backlog(run_id)
+    tool = create_ado_writer_tool(run_id)
     
     params = json.dumps({'dry_run': True})
     result_json = tool(params)
@@ -44,10 +83,14 @@ def test_write_mode_mock():
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
         
-        # Ensure PAT is set
+        # Ensure ADO config is set
         os.environ['ADO_PAT'] = 'test_pat_token'
+        os.environ['ADO_ORG'] = 'rickywck'
+        os.environ['ADO_PROJECT'] = 'rde-lab'
         
-        tool = create_ado_writer_tool('a5b9d811-7cc7-481f-8cab-6f93619aa42f')
+        run_id = 'a5b9d811-7cc7-481f-8cab-6f93619aa42f'
+        _write_minimal_backlog(run_id)
+        tool = create_ado_writer_tool(run_id)
         
         params = json.dumps({'dry_run': False})
         result_json = tool(params)
@@ -70,7 +113,9 @@ def test_write_mode_mock():
 
 def test_filters():
     """Test tag filtering"""
-    tool = create_ado_writer_tool('a5b9d811-7cc7-481f-8cab-6f93619aa42f')
+    run_id = 'a5b9d811-7cc7-481f-8cab-6f93619aa42f'
+    _write_minimal_backlog(run_id)
+    tool = create_ado_writer_tool(run_id)
     
     # Test with different filter tags
     params = json.dumps({'dry_run': True, 'filter_tags': ['new']})

@@ -6,6 +6,7 @@ Demonstrates that conversation history persists across multiple requests
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from supervisor import SupervisorAgent
 
 
+@pytest.mark.asyncio
 async def test_conversation_history():
     """
     Test that conversation history is maintained across multiple interactions
