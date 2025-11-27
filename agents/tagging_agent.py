@@ -108,7 +108,7 @@ def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], t
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
 
 
-def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.5):
+def create_tagging_agent(run_id: str, default_similarity_threshold: float = None):
     """Create a tagging agent tool for a specific run."""
 
     # Load prompts from external configuration
@@ -124,6 +124,10 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.5)
             _cfg = yaml.safe_load(f) or {}
     else:
         _cfg = {"openai": {"chat_model": "gpt-4o"}}
+
+    if default_similarity_threshold is None:
+        default_similarity_threshold = float(_cfg.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5))
+
     model_id = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
     model = OpenAIModel(model_id=model_id, params={"temperature": params.get("temperature", 0.2), "max_tokens": params.get("max_tokens", 500)})
 

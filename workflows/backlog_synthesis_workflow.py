@@ -38,7 +38,7 @@ class BacklogSynthesisWorkflow:
         self.config = config or self._load_config()
         
         # Configuration
-        self.min_similarity = self.config.get("retrieval", {}).get("min_similarity_threshold", 0.7)
+        self.min_similarity = self.config.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5)
         self.embedding_model = self.config.get("openai", {}).get("embedding_model", "text-embedding-3-small")
         # Ensure embedding dims align with Pinecone index dimension (default 512)
         self.embedding_dimensions = int(self.config.get("openai", {}).get("embedding_dimensions", 512))

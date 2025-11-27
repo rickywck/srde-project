@@ -155,7 +155,7 @@ def _is_user_story(item: Dict[str, Any]) -> bool:
 
 
 def _get_threshold(cfg: Dict[str, Any]) -> float:
-    return float(cfg.get("retrieval", {}).get("min_similarity_threshold", 0.5))
+    return float(cfg.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5))
 
 
 @pytest.mark.skipif(False, reason="enabled")

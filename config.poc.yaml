@@ -22,6 +22,8 @@ retrieval:
   architecture:
     top_k: 
     min_similarity_threshold: 0.5
+  tagging:
+    min_similarity_threshold: 0.5
 
 project: {}
 
