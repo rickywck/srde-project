@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 from workflows import BacklogSynthesisWorkflow, StrandsBacklogWorkflow
 from tools.ado_writer_tool import create_ado_writer_tool
 from tools.file_extractor import FileExtractor
