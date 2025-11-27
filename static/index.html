@@ -56,6 +56,27 @@
             border-radius: 4px;
         }
 
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .icon-btn {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.35);
+            color: #fff;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s ease;
+        }
+
+        .icon-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
         .main-content {
             display: flex;
             flex: 1;
@@ -413,7 +434,10 @@
     <div class="container">
         <div class="header">
             <h1>🎯 Backlog Synthesizer</h1>
-            <div class="run-id" id="runIdDisplay">No document loaded</div>
+            <div class="header-controls">
+                <button class="icon-btn" id="resetSessionBtn" title="Start new session">🔄 New</button>
+                <div class="run-id" id="runIdDisplay">No document loaded</div>
+            </div>
         </div>
 
         <div class="main-content">
@@ -485,6 +509,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=4"></script>
+    <script src="/static/app.js?v=5"></script>
 </body>
 </html>

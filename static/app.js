@@ -17,6 +17,7 @@ const statusText = document.getElementById('statusText');
 const tokenInfo = document.getElementById('tokenInfo');
 const runsList = document.getElementById('runsList');
 const modelSelect = document.getElementById('modelSelect');
+const resetSessionBtn = document.getElementById('resetSessionBtn');
 
 // Chat document upload elements
 const attachBtn = document.getElementById('attachBtn');
@@ -156,6 +157,13 @@ function setupEventListeners() {
             handleChatFileSelect({ target: chatFileInput });
         }
     });
+
+    // Reset session
+    if (resetSessionBtn) {
+        resetSessionBtn.addEventListener('click', () => {
+            resetSession();
+        });
+    }
 }
 
 // Initialize model picker with current OpenAI chat models (excluding special-purpose)
@@ -499,6 +507,38 @@ function generateRunId() {
         const v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+function resetSession() {
+    // Create a fresh run id and clear UI state
+    currentRunId = generateRunId();
+    try { sessionStorage.setItem('currentRunId', currentRunId); } catch (_) {}
+    runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
+
+    // Clear chat UI and show welcome
+    chatMessages.innerHTML = '';
+    addMessage('system', '🔄 Started a new session. You can upload a file or chat directly.');
+
+    // Clear attachment state
+    if (chatAttachedDocument) {
+        removeChatAttachment();
+    }
+
+    // Reset indicators
+    tokenInfo.textContent = '';
+    statusText.textContent = 'Ready';
+
+    // Enable chat; disable quick actions until document exists
+    enableChatInterface();
+    generateBtn.disabled = true;
+    showBacklogBtn.disabled = true;
+    showTaggingBtn.disabled = true;
+    evaluateBtn.disabled = true;
+    if (adoPreviewBtn) adoPreviewBtn.disabled = true;
+    if (adoExportBtn) adoExportBtn.disabled = true;
+
+    // Refresh runs list highlighting (new run not persisted until used)
+    loadRuns();
 }
 
 async function sendMessage() {
