@@ -320,8 +320,8 @@ def _write_to_ado(
     
     # Return results
     status = "ok" if not errors else "partial" if created_items else "error"
-    
-    return json.dumps({
+
+    result_obj = {
         "status": status,
         "mode": "write",
         "run_id": run_id,
@@ -333,7 +333,21 @@ def _write_to_ado(
             "features_created": len([i for i in created_items if i["type"] == "Feature"]),
             "stories_created": len([i for i in created_items if i["type"] == "User Story"])
         }
-    }, indent=2)
+    }
+
+    # Persist latest export result for UI to fetch
+    try:
+        run_dir = Path("runs") / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        out_path = run_dir / "ado_export_last.json"
+        # Include timestamp for reference
+        payload = {"timestamp": __import__("datetime").datetime.utcnow().isoformat(), **result_obj}
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # Non-fatal if persisting fails
+        pass
+
+    return json.dumps(result_obj, indent=2)
 
 
 def create_ado_writer_tool(run_id: str):
@@ -545,19 +559,29 @@ def create_ado_writer_tool(run_id: str):
 
         # If dry-run, return the plan overview only
         if dry_run:
-            return json.dumps({
+            result_obj = {
                 "status": "ok",
                 "mode": "dry_run",
                 "run_id": effective_run_id,
                 "summary": summary,
                 "created_items": [],
                 "errors": [],
-            }, indent=2)
+            }
+            # Persist preview result for UI
+            try:
+                run_dir = Path("runs") / effective_run_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                out_path = run_dir / "ado_export_last.json"
+                payload = {"timestamp": __import__("datetime").datetime.utcnow().isoformat(), **result_obj}
+                out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            return json.dumps(result_obj, indent=2)
 
         # Non-dry run: validate env
         ado_pat = os.getenv(ado_pat_env_var)
         if not (ado_pat and ado_org and ado_project):
-            return json.dumps({
+            result_obj = {
                 "status": "error",
                 "run_id": effective_run_id,
                 "summary": summary,
@@ -565,7 +589,16 @@ def create_ado_writer_tool(run_id: str):
                 "errors": [
                     f"Missing ADO configuration. Ensure config.poc.yaml has ado section or set env vars {ado_pat_env_var}, ADO_ORG, ADO_PROJECT."
                 ],
-            }, indent=2)
+            }
+            try:
+                run_dir = Path("runs") / effective_run_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                out_path = run_dir / "ado_export_last.json"
+                payload = {"timestamp": __import__("datetime").datetime.utcnow().isoformat(), **result_obj}
+                out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            return json.dumps(result_obj, indent=2)
 
         # Perform actual ADO writes using REST API
         return _write_to_ado(

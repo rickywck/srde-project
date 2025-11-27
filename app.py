@@ -184,6 +184,26 @@ async def ado_export(run_id: str, dry_run: bool = True, filter_tags: Optional[st
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ADO export failed: {str(e)}")
 
+@app.get("/ado-export/last/{run_id}")
+async def ado_export_last(run_id: str):
+    """
+    Return the most recent ADO export result (preview or actual) for a run.
+    """
+    try:
+        run_dir = get_run_dir(run_id)
+        last_path = run_dir / "ado_export_last.json"
+        if not last_path.exists():
+            raise HTTPException(status_code=404, detail="No ADO export result found for this run")
+        try:
+            data = json.loads(last_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to parse ADO result: {str(e)}")
+        return JSONResponse(content=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load ADO result: {str(e)}")
+
 @app.post("/chat/{run_id}", response_model=ChatResponse)
 async def chat(run_id: str, message: ChatMessage):
     """

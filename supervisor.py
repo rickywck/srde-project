@@ -114,9 +114,13 @@ class SupervisorAgent:
         runs_dir = Path("runs")
         run_dir = runs_dir / run_id
         backlog_file = run_dir / "generated_backlog.jsonl"
+        ado_result_file = run_dir / "ado_export_last.json"
         backlog_existed_before = backlog_file.exists()
         backlog_mtime_before = backlog_file.stat().st_mtime if backlog_existed_before else None
         backlog_size_before = backlog_file.stat().st_size if backlog_existed_before else None
+        ado_existed_before = ado_result_file.exists()
+        ado_mtime_before = ado_result_file.stat().st_mtime if ado_existed_before else None
+        ado_size_before = ado_result_file.stat().st_size if ado_existed_before else None
 
         # Setup session manager for this run
         session_manager = FileSessionManager(
@@ -202,9 +206,15 @@ class SupervisorAgent:
                 }
             }
 
-            # Detect if backlog was generated/updated during this message handling
+            # Detect if ADO export result was produced during this message handling
             try:
-                if backlog_file.exists():
+                if ado_result_file.exists():
+                    am_after = ado_result_file.stat().st_mtime
+                    as_after = ado_result_file.stat().st_size
+                    if (not ado_existed_before) or (am_after != ado_mtime_before) or (as_after != ado_size_before):
+                        result["response_type"] = "ado_export"
+                # If not ADO, detect backlog generation/update
+                if "response_type" not in result and backlog_file.exists():
                     mtime_after = backlog_file.stat().st_mtime
                     size_after = backlog_file.stat().st_size
                     if (not backlog_existed_before) or (mtime_after != backlog_mtime_before) or (size_after != backlog_size_before):

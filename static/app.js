@@ -321,6 +321,77 @@ async function adoExport(dryRun = true) {
     }
 }
 
+// Render ADO export result or preview returned by server
+function renderAdoExportFromData(data) {
+    const mode = data?.mode;
+    const counts = data?.summary?.counts || {};
+    if (mode === 'dry_run') {
+        const adoConfig = data?.summary?.ado_config || {};
+        let previewMsg = `🧾 <strong>ADO Export Preview</strong>\n\n`;
+        previewMsg += `<strong>What will be created:</strong>\n`;
+        previewMsg += `  📦 Epics: ${counts.epics || 0}\n`;
+        previewMsg += `  🎯 Features: ${counts.features || 0}\n`;
+        previewMsg += `  📝 User Stories: ${counts.stories || 0}\n\n`;
+        previewMsg += `<strong>Target:</strong> ${adoConfig.organization}/${adoConfig.project}\n`;
+        previewMsg += `<strong>Filter:</strong> ${(data?.summary?.filter_tags || []).join(', ')}\n`;
+        previewMsg += `<strong>Status:</strong> ${adoConfig.pat_present ? '✅ Ready to export' : '❌ PAT not configured'}`;
+        addMessage('system', previewMsg);
+        return;
+    }
+
+    // Otherwise render write/actual export result
+    const createdItems = data?.created_items || [];
+    const errors = data?.errors || [];
+    let resultMsg = '';
+    if (data.status === 'ok' || data.status === 'partial') {
+        resultMsg += `🚀 <strong>ADO Export Complete!</strong>\n\n`;
+        if (createdItems.length > 0) {
+            resultMsg += `<strong>Created ${createdItems.length} work item${createdItems.length !== 1 ? 's' : ''}:</strong>\n\n`;
+            const epics = createdItems.filter(i => i.type === 'Epic');
+            const features = createdItems.filter(i => i.type === 'Feature');
+            const stories = createdItems.filter(i => i.type === 'User Story');
+            if (epics.length) {
+                resultMsg += `📦 <strong>Epics (${epics.length}):</strong>\n`;
+                epics.forEach(item => { resultMsg += `  • <a href="${item.url}" target="_blank" style="color:#667eea;text-decoration:none;">#${item.ado_id}</a> ${item.title}\n`; });
+                resultMsg += `\n`;
+            }
+            if (features.length) {
+                resultMsg += `🎯 <strong>Features (${features.length}):</strong>\n`;
+                features.forEach(item => {
+                    resultMsg += `  • <a href="${item.url}" target="_blank" style="color:#667eea;text-decoration:none;">#${item.ado_id}</a> ${item.title}`;
+                    if (item.parent_ado_id) resultMsg += ` <span style="color:#999;">(parent: #${item.parent_ado_id})</span>`;
+                    resultMsg += `\n`;
+                });
+                resultMsg += `\n`;
+            }
+            if (stories.length) {
+                resultMsg += `📝 <strong>User Stories (${stories.length}):</strong>\n`;
+                stories.forEach(item => {
+                    resultMsg += `  • <a href="${item.url}" target="_blank" style="color:#667eea;text-decoration:none;">#${item.ado_id}</a> ${item.title}`;
+                    if (item.parent_ado_id) resultMsg += ` <span style="color:#999;">(parent: #${item.parent_ado_id})</span>`;
+                    resultMsg += `\n`;
+                });
+            }
+        } else {
+            resultMsg += `⚠️ No items were created.\n\n`;
+        }
+        if (errors.length) {
+            resultMsg += `\n<strong style=\"color:#d32f2f;\">⚠️ Errors encountered (${errors.length}):</strong>\n`;
+            errors.forEach(err => { resultMsg += `  • ${err}\n`; });
+        }
+        addMessage('system', resultMsg);
+    } else {
+        resultMsg += `❌ <strong>ADO Export Failed</strong>\n\n`;
+        if (errors.length) {
+            errors.forEach(err => { resultMsg += `• ${err}\n`; });
+        } else {
+            resultMsg += `Status: ${data.status}\n`;
+            resultMsg += `Mode: ${data.mode || 'unknown'}`;
+        }
+        addMessage('system', resultMsg);
+    }
+}
+
 async function handleChatFileSelect(event) {
     const file = event.target.files[0];
     if (file) {
@@ -449,6 +520,23 @@ async function sendMessage() {
                 addMessage('assistant', data.response);
             }
             await loadBacklog();
+        } else if (data && data.response_type === 'ado_export') {
+            if (data.response) {
+                addMessage('assistant', data.response);
+            }
+            // Fetch last export result and render it
+            try {
+                const res = await fetch(`/ado-export/last/${currentRunId}`);
+                if (res.ok) {
+                    const exportData = await res.json();
+                    renderAdoExportFromData(exportData);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    addMessage('system', `❌ Failed to load ADO export result: ${err.detail || res.status}`);
+                }
+            } catch (e) {
+                addMessage('system', `❌ Failed to load ADO export result: ${e.message}`);
+            }
         } else {
             // Default assistant text response
             addMessage('assistant', data.response);
