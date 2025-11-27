@@ -40,7 +40,11 @@ class BacklogSynthesisWorkflow:
         # Configuration
         self.min_similarity = self.config.get("retrieval", {}).get("min_similarity_threshold", 0.7)
         self.embedding_model = self.config.get("openai", {}).get("embedding_model", "text-embedding-3-small")
+        # Ensure embedding dims align with Pinecone index dimension (default 512)
+        self.embedding_dimensions = int(self.config.get("openai", {}).get("embedding_dimensions", 512))
         self.index_name = self.config.get("pinecone", {}).get("index_name", "rde-lab")
+        # Optional Pinecone namespace (project scoped)
+        self.pinecone_namespace = (self.config.get("pinecone", {}).get("project") or "").strip()
         
         # Initialize clients (lazy)
         self._openai_client = None
@@ -245,17 +249,21 @@ class BacklogSynthesisWorkflow:
             # Generate embedding
             emb_resp = self.openai_client.embeddings.create(
                 model=self.embedding_model,
-                input=story_text[:3000]
+                input=story_text[:3000],
+                dimensions=self.embedding_dimensions
             )
             vec = emb_resp.data[0].embedding
             
-            # Query Pinecone
-            query_res = self.index.query(
-                vector=vec,
-                top_k=10,
-                filter={"doc_type": "ado_backlog"},
-                include_metadata=True
-            )
+            # Query Pinecone (use namespace if configured) with metadata filter
+            query_kwargs = {
+                "vector": vec,
+                "top_k": 10,
+                "filter": {"doc_type": "ado_backlog"},
+                "include_metadata": True,
+            }
+            if self.pinecone_namespace:
+                query_kwargs["namespace"] = self.pinecone_namespace
+            query_res = self.index.query(**query_kwargs)
             
             # Filter by similarity threshold and type
             similar_stories = []

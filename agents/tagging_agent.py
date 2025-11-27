@@ -108,7 +108,7 @@ def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], t
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
 
 
-def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7):
+def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.5):
     """Create a tagging agent tool for a specific run."""
 
     # Load prompts from external configuration
