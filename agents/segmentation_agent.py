@@ -4,6 +4,7 @@ Segmentation Agent - Specialized agent for document segmentation with intent det
 
 import os
 import json
+import yaml
 from pathlib import Path
 from openai import OpenAI
 from strands import Agent, tool
@@ -28,7 +29,14 @@ def create_segmentation_agent(run_id: str):
         raise ValueError("OPENAI_API_KEY not found in environment")
     
     openai_client = OpenAI(api_key=api_key) if api_key else None
-    model_name = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
+    # Load default model from config, allow env override via OPENAI_CHAT_MODEL
+    config_path = "config.poc.yaml"
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            _cfg = yaml.safe_load(f) or {}
+    else:
+        _cfg = {"openai": {"chat_model": "gpt-4o"}}
+    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
     
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()

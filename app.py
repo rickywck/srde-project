@@ -46,6 +46,7 @@ class ChatMessage(BaseModel):
     message: str
     instruction_type: Optional[str] = None
     document_text: Optional[str] = None  # Optional document for chat-specific upload
+    model_override: Optional[str] = None  # Optional: override OpenAI chat model
 
 class ChatResponse(BaseModel):
     run_id: str
@@ -237,7 +238,8 @@ async def chat(run_id: str, message: ChatMessage):
             run_id=run_id,
             message=message.message,
             instruction_type=message.instruction_type,
-            document_text=document_text
+            document_text=document_text,
+            model_override=message.model_override
         )
         
         # Save assistant response to history

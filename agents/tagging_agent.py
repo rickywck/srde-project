@@ -41,6 +41,7 @@ from pathlib import Path
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
 from .prompt_loader import get_prompt_loader
+import yaml
 
 
 # Note: System prompt now loaded from prompts/tagging_agent.yaml
@@ -116,7 +117,14 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = 0.7)
     params = prompt_loader.get_parameters("tagging_agent")
     
     # Prepare lightweight model instance (reads OPENAI_API_KEY env)
-    model_id = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
+    # Load default model from config, allow env override
+    config_path = "config.poc.yaml"
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            _cfg = yaml.safe_load(f) or {}
+    else:
+        _cfg = {"openai": {"chat_model": "gpt-4o"}}
+    model_id = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
     model = OpenAIModel(model_id=model_id, params={"temperature": params.get("temperature", 0.2), "max_tokens": params.get("max_tokens", 500)})
 
     @tool

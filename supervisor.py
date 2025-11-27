@@ -78,6 +78,7 @@ class SupervisorAgent:
         self.sessions_dir = sessions_dir
         Path(self.sessions_dir).mkdir(exist_ok=True)
         self.agents_cache: Dict[str, Agent] = {}
+        self.agent_models: Dict[str, str] = {}
 
         # Track current run_id for tools
         self.current_run_id = None
@@ -101,7 +102,8 @@ class SupervisorAgent:
         run_id: str,
         message: str,
         instruction_type: Optional[str] = None,
-        document_text: Optional[str] = None
+        document_text: Optional[str] = None,
+        model_override: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Process a user message using Strands agent orchestration with session management.
@@ -122,6 +124,12 @@ class SupervisorAgent:
         ado_mtime_before = ado_result_file.stat().st_mtime if ado_existed_before else None
         ado_size_before = ado_result_file.stat().st_size if ado_existed_before else None
 
+        # Determine model to use (override > config default)
+        default_model = self.config.get("openai", {}).get("chat_model", os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"))
+        model_id = model_override or default_model
+        # Ensure env var aligns for child tools created below
+        os.environ["OPENAI_CHAT_MODEL"] = model_id
+
         # Setup session manager for this run
         session_manager = FileSessionManager(
             session_id=run_id,
@@ -129,7 +137,8 @@ class SupervisorAgent:
         )
 
         # Reuse agent if cached, else create and cache
-        if run_id in self.agents_cache:
+        agent = None
+        if run_id in self.agents_cache and self.agent_models.get(run_id) == model_id:
             agent = self.agents_cache[run_id]
         else:
             segmentation_agent = create_segmentation_agent(run_id)
@@ -139,8 +148,14 @@ class SupervisorAgent:
             evaluation_agent = create_evaluation_agent(run_id)
             ado_writer_tool = create_ado_writer_tool(run_id)
 
+            # Create a model instance for this session
+            session_model = OpenAIModel(
+                model_id=model_id,
+                params=get_prompt_loader().get_parameters("supervisor_agent")
+            )
+
             agent = Agent(
-                model=self.model,
+                model=session_model,
                 system_prompt=self.system_prompt,
                 callback_handler=None,
                 tools=[
@@ -164,6 +179,7 @@ class SupervisorAgent:
                 }
             )
             self.agents_cache[run_id] = agent
+            self.agent_models[run_id] = model_id
 
         # Build context-aware query for the agent
         query_parts = []

@@ -16,6 +16,7 @@ const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const tokenInfo = document.getElementById('tokenInfo');
 const runsList = document.getElementById('runsList');
+const modelSelect = document.getElementById('modelSelect');
 
 // Chat document upload elements
 const attachBtn = document.getElementById('attachBtn');
@@ -38,6 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadRuns();
     // Enable chat interface on load (no document upload required)
     enableChatInterface();
+    initModelPicker();
 });
 
 function enableChatInterface() {
@@ -153,6 +155,34 @@ function setupEventListeners() {
             chatFileInput.files = dataTransfer.files;
             handleChatFileSelect({ target: chatFileInput });
         }
+    });
+}
+
+// Initialize model picker with current OpenAI chat models (excluding special-purpose)
+function initModelPicker() {
+    if (!modelSelect) return;
+    const MODEL_OPTIONS = [
+        'gpt-4o',
+        'gpt-4o-mini',
+        'gpt-4.1',
+        'gpt-4.1-mini',
+        'gpt-5.1',
+        'gpt-5',
+        'gpt-5-mini',
+        'gpt-5-nano'
+    ];
+    const saved = localStorage.getItem('openai_model') || MODEL_OPTIONS[0];
+    modelSelect.innerHTML = '';
+    MODEL_OPTIONS.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === saved) opt.selected = true;
+        modelSelect.appendChild(opt);
+    });
+    modelSelect.addEventListener('change', () => {
+        localStorage.setItem('openai_model', modelSelect.value);
+        addMessage('system', `🧠 Model set to ${modelSelect.value}`);
     });
 }
 
@@ -493,6 +523,13 @@ async function sendMessage() {
         const requestBody = {
             message: message
         };
+        // Include model override if selected
+        if (modelSelect && modelSelect.value) {
+            requestBody.model_override = modelSelect.value;
+        } else {
+            const savedModel = localStorage.getItem('openai_model');
+            if (savedModel) requestBody.model_override = savedModel;
+        }
         
         // Include chat-attached document if present
         if (chatAttachedDocument) {

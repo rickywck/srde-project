@@ -4,6 +4,7 @@ Backlog Generation Agent - Specialized agent for generating backlog items from s
 
 import os
 import json
+import yaml
 from typing import Dict, Any
 from pathlib import Path
 from openai import OpenAI
@@ -24,7 +25,14 @@ def create_backlog_generation_agent(run_id: str):
     
     # Get OpenAI configuration
     api_key = os.getenv("OPENAI_API_KEY")
-    model_name = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
+    # Load default model from config, allow env override
+    config_path = "config.poc.yaml"
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            _cfg = yaml.safe_load(f) or {}
+    else:
+        _cfg = {"openai": {"chat_model": "gpt-4o"}}
+    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
     
     openai_client = OpenAI(api_key=api_key) if api_key else None
     
