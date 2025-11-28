@@ -5,7 +5,7 @@ Backlog Generation Agent - Specialized agent for generating backlog items from s
 import os
 import json
 import yaml
-from typing import Dict, Any
+from typing import Dict, Any, List, Union
 from pathlib import Path
 from openai import OpenAI
 from strands import tool
@@ -56,8 +56,34 @@ def create_backlog_generation_agent(run_id: str):
     system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
     params = prompt_loader.get_parameters("backlog_generation_agent")
     
+    def _safe_json_extract(text: str) -> Dict[str, Any]:
+        """Attempt to parse JSON, falling back to extracting first {...} block."""
+        if text is None:
+            return {}
+        if isinstance(text, (dict, list)):
+            return text  # already parsed
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        import re
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return {}
+        return {}
+
     @tool
-    def generate_backlog(segment_data: str) -> str:
+    def generate_backlog(
+        segment_data: Union[str, Dict[str, Any]] = None,
+        segment_id: int = None,
+        segment_text: str = None,
+        intent_labels: List[str] = None,
+        dominant_intent: str = None,
+        retrieved_context: Dict[str, Any] = None,
+    ) -> str:
         """
         Generate backlog items (epics, features, stories) from a segment with retrieved context.
         
@@ -74,13 +100,21 @@ def create_backlog_generation_agent(run_id: str):
         """
         
         try:
-            # Parse input
-            data = json.loads(segment_data)
-            segment_id = data.get("segment_id", 0)
-            segment_text = data.get("segment_text", "")
-            intent_labels = data.get("intent_labels", [])
-            dominant_intent = data.get("dominant_intent", "")
-            retrieved_context = data.get("retrieved_context", {})
+            # Parse input (support structured tool calls and legacy JSON string)
+            if segment_data is not None and (segment_id is None and segment_text is None):
+                data = _safe_json_extract(segment_data)
+                segment_id = data.get("segment_id", 0)
+                segment_text = data.get("segment_text", "")
+                intent_labels = data.get("intent_labels", [])
+                dominant_intent = data.get("dominant_intent", "")
+                retrieved_context = data.get("retrieved_context", {})
+            else:
+                # Structured args path
+                segment_id = segment_id or 0
+                segment_text = segment_text or ""
+                intent_labels = intent_labels or []
+                dominant_intent = dominant_intent or ""
+                retrieved_context = retrieved_context or {}
             
             print(f"Backlog Generation Agent: Processing segment {segment_id} (run_id: {run_id})")
             

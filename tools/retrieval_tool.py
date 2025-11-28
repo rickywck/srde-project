@@ -5,7 +5,7 @@ Retrieval Tool - Tool for querying Pinecone for relevant context
 import os
 import json
 import yaml
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 from openai import OpenAI
 from pinecone import Pinecone
 from strands import tool
@@ -77,8 +77,32 @@ def create_retrieval_tool(run_id: str):
         ), 0.5
     )
     
+    def _safe_json_extract(text: str) -> Dict[str, Any]:
+        if text is None:
+            return {}
+        if isinstance(text, (dict, list)):
+            return text
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        import re
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return {}
+        return {}
+
     @tool
-    def retrieve_context(query_data: str) -> str:
+    def retrieve_context(
+        query_data: Union[str, Dict[str, Any]] = None,
+        segment_text: str = None,
+        intent_labels: List[str] = None,
+        dominant_intent: str = None,
+        segment_id: int = None,
+    ) -> str:
         """
         Retrieve relevant context from Pinecone (ADO backlog items and architecture constraints).
         
@@ -94,12 +118,18 @@ def create_retrieval_tool(run_id: str):
         """
         
         try:
-            # Parse input
-            query_info = json.loads(query_data)
-            segment_text = query_info.get("segment_text", "")
-            intent_labels = query_info.get("intent_labels", [])
-            dominant_intent = query_info.get("dominant_intent", "")
-            segment_id = query_info.get("segment_id", 0)
+            # Parse input (support structured and legacy string argument)
+            if query_data is not None and (segment_text is None and segment_id is None):
+                query_info = _safe_json_extract(query_data)
+                segment_text = query_info.get("segment_text", "")
+                intent_labels = query_info.get("intent_labels", [])
+                dominant_intent = query_info.get("dominant_intent", "")
+                segment_id = query_info.get("segment_id", 0)
+            else:
+                segment_text = segment_text or ""
+                intent_labels = intent_labels or []
+                dominant_intent = dominant_intent or ""
+                segment_id = int(segment_id or 0)
             
             print(f"Retrieval Tool: Processing segment {segment_id} (run_id: {run_id})")
             

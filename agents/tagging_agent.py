@@ -132,7 +132,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     model = OpenAIModel(model_id=model_id, params={"temperature": params.get("temperature", 0.2), "max_tokens": params.get("max_tokens", 500)})
 
     @tool
-    def tag_story(story_data: str) -> str:
+    def tag_story(story_data: Any = None, story: Dict[str, Any] = None, similar_existing_stories: List[Dict[str, Any]] = None, similarity_threshold: float = None) -> str:
         """Tag a user story relative to existing backlog (new/gap/conflict)."""
         
         def _finalize(result: Dict[str, Any], internal_id: Any = None, title: str = None) -> str:
@@ -153,20 +153,32 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 
             return json.dumps(result)
 
-        try:
-            payload = json.loads(story_data)
-        except Exception as e:
-            return _finalize({
-                "status": "error",
-                "run_id": run_id,
-                "decision_tag": "new",
-                "related_ids": [],
-                "reason": f"Invalid input JSON: {e}",
-                "early_exit": True,
-                "similarity_threshold": default_similarity_threshold,
-                "similar_count": 0,
-                "model_used": model_id
-            })
+        # Accept both legacy JSON string and structured arguments
+        payload: Dict[str, Any] = {}
+        if story_data is not None and story is None and similar_existing_stories is None:
+            if isinstance(story_data, (dict, list)):
+                payload = story_data if isinstance(story_data, dict) else {}
+            else:
+                try:
+                    payload = json.loads(story_data)
+                except Exception as e:
+                    return _finalize({
+                        "status": "error",
+                        "run_id": run_id,
+                        "decision_tag": "new",
+                        "related_ids": [],
+                        "reason": f"Invalid input JSON: {e}",
+                        "early_exit": True,
+                        "similarity_threshold": default_similarity_threshold,
+                        "similar_count": 0,
+                        "model_used": model_id
+                    })
+        else:
+            payload = {
+                "story": story or {},
+                "similar_existing_stories": similar_existing_stories or [],
+                "similarity_threshold": similarity_threshold if similarity_threshold is not None else default_similarity_threshold,
+            }
 
         story = payload.get("story", {})
         similar = payload.get("similar_existing_stories", [])
