@@ -11,7 +11,7 @@ import pytest
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 
 
 @pytest.mark.asyncio

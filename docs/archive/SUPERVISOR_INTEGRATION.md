@@ -138,7 +138,7 @@ Supervisor:
 Verify integration:
 ```bash
 # Test supervisor initialization
-python -c "from supervisor import SupervisorAgent; s = SupervisorAgent(); print('OK')"
+python -c "from agents.supervisor_agent import SupervisorAgent; s = SupervisorAgent(); print('OK')"
 
 # Test app startup
 python -c "from app import app, supervisor; print('OK')"

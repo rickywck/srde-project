@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import asyncio
 import json
 import uuid
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 
 
 async def demo_segmentation():

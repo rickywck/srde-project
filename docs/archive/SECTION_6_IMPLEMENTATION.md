@@ -53,7 +53,7 @@ Save to runs/{run_id}/generated_backlog.jsonl
 ### Basic Usage
 
 ```python
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 from tools.retrieval_tool import create_retrieval_tool
 from agents.backlog_generation_agent import create_backlog_generation_agent
 

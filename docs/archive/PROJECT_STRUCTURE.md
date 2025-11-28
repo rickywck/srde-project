@@ -167,7 +167,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 ```
 
 ## Benefits of This Structure

@@ -5,7 +5,7 @@ Test the Strands-powered Supervisor Agent
 import asyncio
 import os
 import pytest
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 
 @pytest.mark.asyncio
 async def test_supervisor():

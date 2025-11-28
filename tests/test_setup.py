@@ -69,7 +69,8 @@ def test_config():
         print("✓ config.poc.yaml is valid YAML")
         
         # Check required keys
-        required_keys = ["openai", "ado", "pinecone", "project"]
+        # Note: `project` is no longer a top-level config section; use `pinecone.project` instead.
+        required_keys = ["openai", "ado", "pinecone"]
         for key in required_keys:
             if key in config:
                 print(f"✓ Config has '{key}' section")
@@ -151,7 +152,7 @@ def test_modules():
     
     success = True
     try:
-        from supervisor import SupervisorAgent
+        from agents.supervisor_agent import SupervisorAgent
         print("✓ Can import SupervisorAgent")
     except ImportError as e:
         print(f"✗ Cannot import SupervisorAgent: {e}")

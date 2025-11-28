@@ -89,14 +89,14 @@ PINECONE_API_KEY=your_pinecone_api_key
 OPENAI_API_KEY=your_openai_api_key
 ```
 
-4. Update `config.poc.yaml` with your project details:
+4. Update `config.poc.yaml` with your project details and Pinecone namespace:
 ```yaml
 ado:
   organization: your-org
   project: your-project
 
-project:
-  name: your-project
+pinecone:
+  project: your-project  # Pinecone namespace used for retrieval
 ```
 
 ## Quick Start
@@ -122,15 +122,15 @@ export OPENAI_API_KEY=your_key
 
 ### 2. Configure Project
 
-Edit `config.poc.yaml` with your project details:
+Edit `config.poc.yaml` with your project details and Pinecone namespace:
 
 ```yaml
 ado:
   organization: your-org
   project: your-project
 
-project:
-  name: your-project  # Used as Pinecone namespace
+pinecone:
+  project: your-project  # Used as Pinecone namespace
 ```
 
 ### 3. Load Data (One-time Setup)
@@ -418,8 +418,8 @@ retrieval:
   min_similarity_threshold: 0.5
 
 # Project settings (used as Pinecone namespace)
-project:
-  name: your-project
+pinecone:
+  project: your-project
 ```
 
 ## Troubleshooting

@@ -91,7 +91,7 @@ The segmentation output (`segments.jsonl`) is ready to be consumed by these futu
 ## Usage
 
 ```python
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 import uuid
 
 # Initialize supervisor

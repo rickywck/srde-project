@@ -140,7 +140,7 @@ self.agent = Agent(
 ## Usage Example
 
 ```python
-from supervisor import SupervisorAgent
+from agents.supervisor_agent import SupervisorAgent
 import uuid
 
 # Initialize supervisor
