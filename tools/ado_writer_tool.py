@@ -448,6 +448,8 @@ def create_ado_writer_tool(run_id: str):
                     key = rec.get("story_internal_id") or rec.get("story_id") or rec.get("id") or rec.get("story_title") or rec.get("title")
                     if key:
                         story_tag_map[str(key)] = rec.get("decision_tag")
+        # Flag whether any tagging records were loaded (used to decide default behavior)
+        tagging_present = len(tagging_records) > 0
         
         # Positional matching fallback:
         # If explicit matching (via IDs/titles) didn't populate the map adequately,
@@ -483,7 +485,12 @@ def create_ado_writer_tool(run_id: str):
                 # Try to derive key for tagging lookup (prioritize internal_id)
                 key = item.get("internal_id") or item.get("story_id") or item.get("id") or item.get("title")
                 assigned = story_tag_map.get(str(key))
-            return (assigned in filter_tags) if assigned else False
+            if assigned:
+                return (assigned in filter_tags)
+            # If no tagging information exists at all, include all stories by default
+            if not tagging_present:
+                return True
+            return False
 
         # Build creation plan
         epics: Dict[str, Dict[str, Any]] = {}
