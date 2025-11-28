@@ -170,6 +170,8 @@ function setupEventListeners() {
 // Initialize model picker with current OpenAI chat models (excluding special-purpose)
 function initModelPicker() {
     if (!modelSelect) return;
+    // Default model aligned with server config (`config.poc.yaml`)
+    const DEFAULT_OPENAI_MODEL = 'gpt-5-mini';
     const MODEL_OPTIONS = [
         'gpt-4o',
         'gpt-4o-mini',
@@ -180,7 +182,7 @@ function initModelPicker() {
         'gpt-5-mini',
         'gpt-5-nano'
     ];
-    const saved = localStorage.getItem('openai_model') || MODEL_OPTIONS[0];
+    const saved = localStorage.getItem('openai_model') || DEFAULT_OPENAI_MODEL;
     modelSelect.innerHTML = '';
     MODEL_OPTIONS.forEach(m => {
         const opt = document.createElement('option');
