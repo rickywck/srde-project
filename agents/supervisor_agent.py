@@ -66,7 +66,14 @@ class SupervisorAgent:
         prompt_loader = get_prompt_loader()
         prompt_config = prompt_loader.load_prompt("supervisor_agent")
         self.system_prompt = prompt_loader.get_system_prompt("supervisor_agent")
-        model_params = prompt_loader.get_parameters("supervisor_agent")
+        raw_model_params = prompt_loader.get_parameters("supervisor_agent")
+        # Sanitize model params for newer OpenAI models: drop temperature, map token key
+        mapped_max = (
+            raw_model_params.get("max_completion_tokens")
+            or raw_model_params.get("max_output_tokens")
+            or raw_model_params.get("max_tokens")
+        )
+        model_params = {"max_completion_tokens": mapped_max or 1500}
 
         # Initialize OpenAI model for Strands
         self.model = OpenAIModel(
@@ -194,9 +201,16 @@ class SupervisorAgent:
             ado_writer_tool = create_ado_writer_tool(run_id)
 
             # Create a model instance for this session
+            # Use the same sanitized params for the session model
+            _raw_params = get_prompt_loader().get_parameters("supervisor_agent")
+            _mapped_max = (
+                _raw_params.get("max_completion_tokens")
+                or _raw_params.get("max_output_tokens")
+                or _raw_params.get("max_tokens")
+            )
             session_model = OpenAIModel(
                 model_id=model_id,
-                params=get_prompt_loader().get_parameters("supervisor_agent")
+                params={"max_completion_tokens": _mapped_max or 1500}
             )
 
             agent = Agent(
@@ -316,6 +330,20 @@ class SupervisorAgent:
                     size_after = backlog_file.stat().st_size
                     if (not backlog_existed_before) or (mtime_after != backlog_mtime_before) or (size_after != backlog_size_before):
                         result["response_type"] = "backlog_generated"
+                        # Optional auto-tagging (disabled by default for chat mode).
+                        # Enable by setting SUPERVISOR_AUTO_TAGGING=1 in the environment.
+                        if os.getenv("SUPERVISOR_AUTO_TAGGING") == "1":
+                            try:
+                                tagging_agent = create_tagging_agent(run_id)
+                                tag_out_str = tagging_agent()  # batch mode: reads generated_backlog.jsonl and writes tagging.jsonl
+                                result["status"]["auto_tagging"] = True
+                                result["status"]["auto_tagging_result"] = tag_out_str[:500]
+                                # Prefer showing tagging view if tagging file now exists
+                                if tagging_file.exists():
+                                    result["response_type"] = "tagging"
+                            except Exception as e:
+                                result["status"]["auto_tagging"] = False
+                                result["status"]["auto_tagging_error"] = str(e)
             except Exception:
                 # Non-fatal; ignore detection errors
                 pass

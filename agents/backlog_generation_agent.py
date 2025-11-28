@@ -47,7 +47,11 @@ def create_backlog_generation_agent(run_id: str):
     MAX_ARCH = _as_int(gen_cfg.get("max_arch_in_prompt", 6), 6)
     ADO_DESC_LEN = _as_int(gen_cfg.get("ado_desc_len", 400), 400)
     ARCH_TEXT_LEN = _as_int(gen_cfg.get("arch_text_len", 600), 600)
-    CFG_MAX_TOKENS = _as_int(gen_cfg.get("max_tokens", 1500), 1500)
+    # Prefer new Responses-style token key; fall back to legacy if present
+    CFG_MAX_TOKENS = _as_int(
+        gen_cfg.get("max_completion_tokens", gen_cfg.get("max_tokens", 1500)),
+        1500,
+    )
     
     openai_client = OpenAI(api_key=api_key) if api_key else None
     
@@ -185,16 +189,22 @@ def create_backlog_generation_agent(run_id: str):
             print("Backlog Generation Agent: Calling LLM to generate backlog items...")
             
             # Call LLM
-            # Respect prompt parameter defaults, cap by config if provided
-            eff_max_tokens = min(params.get("max_tokens", 2000), CFG_MAX_TOKENS) if CFG_MAX_TOKENS else params.get("max_tokens", 2000)
+            # Respect prompt parameter defaults, cap by config if provided.
+            # Map across possible config keys to the modern "max_completion_tokens".
+            param_max = (
+                params.get("max_completion_tokens")
+                or params.get("max_output_tokens")
+                or params.get("max_tokens")
+                or 2000
+            )
+            eff_max_tokens = min(param_max, CFG_MAX_TOKENS) if CFG_MAX_TOKENS else param_max
             response = openai_client.chat.completions.create(
                 model=model_name,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=params.get("temperature", 0.7),
-                max_tokens=eff_max_tokens,
+                max_completion_tokens=eff_max_tokens,
                 response_format={"type": params.get("response_format", "json_object")}
             )
             

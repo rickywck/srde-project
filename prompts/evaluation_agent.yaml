@@ -41,6 +41,5 @@ evaluation_schema:
   summary: "string"
 
 parameters:
-  temperature: 0.3
-  max_tokens: 1000
+  max_completion_tokens: 1000
   response_format: json_object

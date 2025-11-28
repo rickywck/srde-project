@@ -18,12 +18,12 @@ openai:
 retrieval:
   ado:
     top_k: 5
-    min_similarity_threshold: 0.5
+    min_similarity_threshold: 0.7
   architecture:
     top_k: 5
-    min_similarity_threshold: 0.5
+    min_simi7larity_threshold: 0.7
   tagging:
-    min_similarity_threshold: 0.5
+    min_similarity_threshold: 0.7
 
 
 generation:
@@ -31,4 +31,4 @@ generation:
   max_arch_in_prompt: 6
   ado_desc_len: 400
   arch_text_len: 600
-  max_tokens: 2000
+  max_tokens: 5000

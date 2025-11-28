@@ -118,11 +118,17 @@ def create_segmentation_agent(run_id: str):
                 if not openai_client:
                     raise ValueError("OpenAI client not initialized and mock mode not enabled. Set OPENAI_API_KEY or SEGMENTATION_AGENT_MOCK=1.")
                 # Call LLM for segmentation
+                # Normalize token parameter to Responses-style key; omit temperature to avoid 400s on newer models
+                max_comp = (
+                    params.get("max_completion_tokens")
+                    or params.get("max_output_tokens")
+                    or params.get("max_tokens")
+                    or 4000
+                )
                 response = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[{"role": "user", "content": segmentation_prompt}],
-                    temperature=params.get("temperature", 0.7),
-                    max_tokens=params.get("max_tokens", 4000),
+                    max_completion_tokens=max_comp,
                     response_format={"type": params.get("response_format", "json_object")}
                 )
                 # Parse response

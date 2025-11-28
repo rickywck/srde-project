@@ -122,14 +122,20 @@ def create_evaluation_agent(run_id: str):
         )
 
         try:
+            # Normalize token parameter and omit temperature (some models only allow default=1)
+            max_comp = (
+                params.get("max_completion_tokens")
+                or params.get("max_output_tokens")
+                or params.get("max_tokens")
+                or 1000
+            )
             response = openai_client.chat.completions.create(
                 model=model_name,
                 messages=[
                     {"role": "system", "content": evaluation_system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=params.get("temperature", 0.3),
-                max_tokens=params.get("max_tokens", 1000),
+                max_completion_tokens=max_comp,
                 response_format={"type": params.get("response_format", "json_object")}
             )
             content = response.choices[0].message.content

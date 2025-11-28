@@ -212,7 +212,8 @@ class BacklogSynthesisWorkflow:
     async def _stage_tagging(self):
         """Stage 4: Tag generated stories"""
         # Load generated backlog items
-        backlog_file = self.run_dir / "generated_backlog.jsonl"
+        # Always read from the canonical runs/<run_id> location where agents write
+        backlog_file = Path(f"runs/{self.run_id}") / "generated_backlog.jsonl"
         if not backlog_file.exists():
             self.log_progress("⚠ No generated backlog found, skipping tagging")
             return
@@ -223,40 +224,56 @@ class BacklogSynthesisWorkflow:
                 if line.strip():
                     generated_items.append(json.loads(line))
         
-        stories = [i for i in generated_items if i.get("type", "").lower() == "user story"]
+        def _is_user_story(item: Dict[str, Any]) -> bool:
+            t = (item.get("type") or item.get("work_item_type") or "").lower()
+            return t in {"user story", "story", "user_story"}
+
+        stories = [i for i in generated_items if _is_user_story(i)]
         
         if not stories:
             self.log_progress("⚠ No stories found, skipping tagging")
             return
         
         self.log_progress(f"Stage 4: Tagging {len(stories)} stories")
-        
+
         tagging_tool = create_tagging_agent(self.run_id)
-        
-        for story in stories:
-            # Retrieve similar existing stories
-            similar_stories = self._find_similar_stories(story)
-            
-            # Call tagging agent (handles persistence internally)
-            tag_payload = {
-                "story": {
-                    "title": story.get("title"),
-                    "description": story.get("description"),
-                    "acceptance_criteria": story.get("acceptance_criteria", []),
-                    "internal_id": story.get("internal_id")
-                },
-                "similar_existing_stories": similar_stories,
-                "similarity_threshold": self.min_similarity
-            }
-            tagging_output = json.loads(tagging_tool(json.dumps(tag_payload)))
-            
-            self.results["tagging"].append(tagging_output)
-        
+
+        # Batch tagging via agent so it manages file initialization once and appends internally
+        stories_payload = []
+        for s in stories:
+            stories_payload.append({
+                "title": s.get("title"),
+                "description": s.get("description"),
+                "acceptance_criteria": s.get("acceptance_criteria", []),
+                "internal_id": s.get("internal_id")
+            })
+
+        batch_payload = {
+            "stories": stories_payload,
+            # Leave similar empty to let the agent perform internal retrieval per story
+            "similar_existing_stories": [],
+            "similarity_threshold": self.min_similarity
+        }
+
+        tagging_result = json.loads(tagging_tool(json.dumps(batch_payload)))
+
+        # tagging_result in multi mode returns aggregated results
         tag_counts = {}
-        for rec in self.results["tagging"]:
-            tag = rec.get("decision_tag", "unknown")
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        
+        if isinstance(tagging_result, dict) and tagging_result.get("status") == "ok":
+            if tagging_result.get("mode") == "multi":
+                results = tagging_result.get("results", [])
+                self.results["tagging"].extend(results)
+                for rec in results:
+                    tag = (rec.get("decision_tag") or "unknown").lower()
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            elif tagging_result.get("mode") == "batch":
+                # batch mode may only return counts; persist what we can
+                self.results["tagging"].append(tagging_result)
+                tag_counts = tagging_result.get("tag_counts", {}) or {}
+        else:
+            # Fallback: no structured result; keep empty but don't fail workflow
+            self.log_progress("⚠ Tagging returned no structured results", save_to_history=False)
+
         self.log_progress(f"✓ Tagged {len(stories)} stories: {tag_counts}")
     
     def _find_similar_stories(self, story: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -272,7 +289,7 @@ class BacklogSynthesisWorkflow:
         self.log_progress("Stage 5: Evaluating backlog quality")
         
         # Load generated backlog
-        backlog_file = self.run_dir / "generated_backlog.jsonl"
+        backlog_file = Path(f"runs/{self.run_id}") / "generated_backlog.jsonl"
         if not backlog_file.exists():
             raise FileNotFoundError("No generated backlog found for evaluation")
         
@@ -342,7 +359,7 @@ class BacklogSynthesisWorkflow:
     def _compile_results(self) -> Dict[str, Any]:
         """Compile comprehensive workflow results"""
         # Load generated items count
-        backlog_file = self.run_dir / "generated_backlog.jsonl"
+        backlog_file = Path(f"runs/{self.run_id}") / "generated_backlog.jsonl"
         generated_items = []
         if backlog_file.exists():
             with open(backlog_file, "r") as bf:
@@ -350,7 +367,11 @@ class BacklogSynthesisWorkflow:
                     if line.strip():
                         generated_items.append(json.loads(line))
         
-        stories = [i for i in generated_items if i.get("type", "").lower() == "user story"]
+        def _is_user_story(item: Dict[str, Any]) -> bool:
+            t = (item.get("type") or item.get("work_item_type") or "").lower()
+            return t in {"user story", "story", "user_story"}
+        
+        stories = [i for i in generated_items if _is_user_story(i)]
         
         # Tag distribution
         tag_counts = {}

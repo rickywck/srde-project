@@ -83,6 +83,5 @@ user_prompt_template: |
   - Be specific and actionable - avoid vague descriptions
 
 parameters:
-  temperature: 0.7
-  max_tokens: 2000
+  max_completion_tokens: 2000
   response_format: json_object
