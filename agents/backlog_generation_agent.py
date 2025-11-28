@@ -32,8 +32,8 @@ def create_backlog_generation_agent(run_id: str):
         with open(config_path, "r") as f:
             _cfg = yaml.safe_load(f) or {}
     else:
-        _cfg = {"openai": {"chat_model": "gpt-4o"}}
-    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
+        _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
+    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
 
     # Generation limits from config
     gen_cfg = _cfg.get("generation", {}) if isinstance(_cfg, dict) else {}

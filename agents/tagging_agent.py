@@ -54,25 +54,6 @@ GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
 USER_STORY_TYPES = {"user story", "story", "user_story"}
 
 # Note: System prompt now loaded from prompts/tagging_agent.yaml
-TAGGING_AGENT_SYSTEM_PROMPT_LEGACY = """You are a backlog tagging specialist.
-Classify ONE generated user story relative to existing backlog items.
-Return STRICT JSON ONLY with fields: decision_tag, related_ids, reason.
-
-Taxonomy:
-- new: No meaningful overlap; introduces novel scope.
-- gap: Extends or complements existing work; fills missing acceptance criteria or edge cases.
-- conflict: Duplicates (substantial overlap) OR contradicts direction/constraints of an existing story.
-
-Heuristics guidance (you may reference internally but output must stay concise):
-- Strong duplication signals: Very similar title wording AND >0.82 similarity.
-- Conflict signals: Existing story implies alternative approach / mutually exclusive requirement.
-- Gap signals: Existing stories partially cover scope but miss explicit ACs or user value described.
-
-YOU MUST choose exactly one decision_tag.
-related_ids should list the most relevant existing work_item_id values (empty if new).
-reason should be a single short sentence.
-Output JSON ONLY. No markdown, no prose outside JSON.
-"""
 
 
 def _safe_json_extract(text: str) -> Dict[str, Any]:
@@ -132,12 +113,12 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         with open(config_path, "r") as f:
             _cfg = yaml.safe_load(f) or {}
     else:
-        _cfg = {"openai": {"chat_model": "gpt-4o"}}
+        _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
 
     if default_similarity_threshold is None:
         default_similarity_threshold = float(_cfg.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5))
 
-    model_id = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4o"))
+    model_id = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
     # Map token parameter for newer OpenAI Responses API which expects 'max_completion_tokens'
     max_comp_tokens = (
         params.get("max_completion_tokens")
@@ -347,23 +328,26 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             resolved_backlog_path = Path(f"runs/{run_id}") / GENERATED_BACKLOG_FILENAME
             current_out_dir = Path(f"runs/{run_id}")
 
-        # Seed processed keys with existing file contents to prevent duplicate writes
-        try:
-            processed_story_keys = _load_existing_processed_keys(current_out_dir)
-        except Exception:
-            processed_story_keys = set()
-
-        # Optionally reset the tagging file only when explicitly requested
-        if not is_subcall and payload.get("__reset", False):
+        # For top-level calls (not internal subcalls) we overwrite the tagging file
+        # so each tagging run starts fresh. For internal subcalls, seed processed
+        # keys from the existing file to avoid duplicate writes within the same run.
+        if not is_subcall:
             try:
                 current_out_dir.mkdir(parents=True, exist_ok=True)
                 tag_file_path = current_out_dir / "tagging.jsonl"
+                # Truncate/overwrite previous results for a fresh run
                 with open(tag_file_path, "w") as f:
                     f.write("")
-                # after reset, clear in-memory keys as well
                 processed_story_keys = set()
+                # Mark file as initialized so _finalize will append subsequent writes
+                out_file_initialized = True
             except Exception:
-                pass
+                processed_story_keys = set()
+        else:
+            try:
+                processed_story_keys = _load_existing_processed_keys(current_out_dir)
+            except Exception:
+                processed_story_keys = set()
 
         # If no payload content was supplied at all (chat invoked without args),
         # attempt batch tagging from the current run's generated backlog file.

@@ -90,7 +90,7 @@ class SupervisorAgent:
             return {
                 "openai": {
                     "api_key_env_var": "OPENAI_API_KEY",
-                    "chat_model": "gpt-4o"
+                    "chat_model": "gpt-4.1-mini"
                 }
             }
         
@@ -170,7 +170,7 @@ class SupervisorAgent:
         tagging_size_before = tagging_file.stat().st_size if tagging_existed_before else None
 
         # Determine model to use (override > config default)
-        default_model = self.config.get("openai", {}).get("chat_model", os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"))
+        default_model = self.config.get("openai", {}).get("chat_model", os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini"))
         model_id = model_override or default_model
         # Ensure env var aligns for child tools created below
         os.environ["OPENAI_CHAT_MODEL"] = model_id
