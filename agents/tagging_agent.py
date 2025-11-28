@@ -3,38 +3,39 @@ Tagging Agent - Generates classification (new | gap | conflict) for a generated
 user story relative to existing backlog stories. Implements early-exit logic,
 robust JSON parsing of LLM output, and lightweight rule-based fallbacks.
 
-Input contract (JSON passed as string to tool):
-{
-  "story": {
-    "title": str,
-    "description": str,
-    "acceptance_criteria": [str],
-    "internal_id": str (optional, for tracking)
-  },
-  "similar_existing_stories": [
-     {"work_item_id": str|int, "title": str, "description": str, "similarity": float}, ...
-  ],
-  "similarity_threshold": float (optional overrides default)
-    // Optional convenience when story is not provided:
-    // if only run_id and segment_id are provided, the agent will
-    // load the corresponding user story from runs/<run_id>/generated_backlog.jsonl
-    "run_id": str (optional, overrides agent run_id for fallback lookup),
-    "segment_id": int|string (optional, selects story from generated backlog)
-}
+IMPORTANT: When invoking this tool, prefer to pass a story object (not a
+filesystem path) in the `story` field. The agent accepts these shapes:
+
+1) Single story (recommended):
+     {"story": {"title": "...", "description": "...", "acceptance_criteria": ["..."]}}
+
+2) Multiple stories (batch):
+     {"stories": [ {"title":..., "description":...}, {...} ]}
+
+3) Reference a run/backlog file (fallback):
+     {"run_id": "<run-id>"}
+     or
+     {"backlog_path": "runs/<run-id>/generated_backlog.jsonl"}
+
+Robustness: If the orchestrator (Strands) or the LLM accidentally supplies a
+filesystem path (e.g. "runs/.../generated_backlog.jsonl") in the `story` field,
+this agent will now treat that string as a `backlog_path` and load the backlog
+file (fallback behavior) rather than erroring out. This keeps the tool tolerant
+to varying call shapes while encouraging the explicit, correct input shapes.
 
 Output contract (JSON string):
 {
-  "status": "ok"|"error",
-  "run_id": str,
-  "decision_tag": "new"|"gap"|"conflict",
-  "related_ids": [str|int],
-  "reason": str,
-  "early_exit": bool,
-  "similarity_threshold": float,
-  "similar_count": int,
-  "model_used": str,
-  "story_internal_id": str,
-  "story_title": str
+    "status": "ok"|"error",
+    "run_id": str,
+    "decision_tag": "new"|"gap"|"conflict",
+    "related_ids": [str|int],
+    "reason": str,
+    "early_exit": bool,
+    "similarity_threshold": float,
+    "similar_count": int,
+    "model_used": str,
+    "story_internal_id": str,
+    "story_title": str
 }
 """
 
@@ -264,24 +265,22 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 return False
 
         story_candidate = payload.get("story")
-        if _looks_like_filesystem_path(story_candidate):
-            return json.dumps({
-                "status": "error",
-                "run_id": run_id,
-                "message": "It looks like you passed a filesystem path or filename in the 'story' field.\nProvide a story object with 'title' and 'description', or pass 'run_id'/'backlog_path' to reference a run. See 'prompts/tagging_agent.yaml' examples.",
-            })
+        # If caller passed a filesystem path string in `story_data`, treat it as
+        # an explicit backlog_path (robustness for Strands/LLM call shapes).
+        if isinstance(story_candidate, str) and _looks_like_filesystem_path(story_candidate):
+            payload = {"backlog_path": story_candidate, "run_id": payload.get("run_id") or run_id}
+            story_candidate = payload.get("story")
 
         # If story is a dict but the title/description are path-like and description is missing,
         # assume caller mistakenly put a path into the title field and return a helpful error.
+        # If a dict was passed but the title looks like a filesystem path and no
+        # description was provided, treat the title as backlog_path (fallback).
         if isinstance(story_candidate, dict):
             title_val = story_candidate.get("title") or ""
             desc_val = story_candidate.get("description") or ""
             if _looks_like_filesystem_path(title_val) and not desc_val:
-                return json.dumps({
-                    "status": "error",
-                    "run_id": run_id,
-                    "message": "The story 'title' looks like a filesystem path and no description was provided.\nProvide a proper story object (title + description) or use 'run_id'/'backlog_path' to point to a run's backlog.",
-                })
+                payload = {"backlog_path": title_val, "run_id": payload.get("run_id") or run_id}
+                story_candidate = payload.get("story")
 
         # Helper: Resolve backlog file path and output directory from payload arguments.
         def _resolve_io_context(_payload: Dict[str, Any]):
