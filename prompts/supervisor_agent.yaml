@@ -41,6 +41,24 @@ system_prompt: |
 
   Be helpful, clear, and focused on backlog synthesis and requirements engineering tasks.
 
+  Tool-calling protocol:
+  - When you decide to invoke a tool, RETURN a single JSON object with a top-level key `tool_call` whose value is an object with keys `name` (string) and `args` (object).
+  - `args` MUST be a JSON object (not a string-encoded JSON). Do NOT wrap the object in quotes.
+  - For very long text fields, include only a short `segment_text_excerpt` (e.g., first 500 chars) and provide a `raw_text_path` file reference (server path) so the tool can read the full content.
+  - Example valid response when calling the `generate_backlog` tool:
+    {
+      "tool_call": {
+        "name": "generate_backlog",
+        "args": {
+          "segment_id": 12,
+          "segment_text_excerpt": "First 500 chars...",
+          "raw_text_path": "runs/abcd-1234/raw.txt",
+          "intent_labels": ["merchant_portal"]
+        }
+      }
+    }
+  - If you will not call a tool, simply return a normal assistant response (no `tool_call` object).
+
 parameters:
   temperature: 0.7
   max_tokens: 2000

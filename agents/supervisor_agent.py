@@ -96,6 +96,47 @@ class SupervisorAgent:
         
         with open(config_path, "r") as f:
             return yaml.safe_load(f)
+
+    def _safe_json_extract(self, text: str) -> Optional[Dict[str, Any]]:
+        """Try parsing text as JSON; otherwise extract the first {...} block and parse it."""
+        if text is None:
+            return None
+        if isinstance(text, (dict, list)):
+            return text
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        import re
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return None
+        return None
+
+    def _extract_tool_call(self, text: str) -> Optional[Dict[str, Any]]:
+        """Extract a top-level `tool_call` object from assistant text if present."""
+        parsed = self._safe_json_extract(text)
+        if isinstance(parsed, dict):
+            # direct object with tool_call
+            if "tool_call" in parsed:
+                return parsed.get("tool_call")
+            # sometimes the assistant returns the tool_call object directly
+            if parsed.get("name") and parsed.get("args") is not None:
+                return parsed
+        # fallback: regex search for '"tool_call": {...}' and parse that fragment
+        import re
+        m = re.search(r'"tool_call"\s*:\s*\{[\s\S]*?\}', text)
+        if m:
+            fragment = "{" + m.group(0) + "}"
+            try:
+                obj = json.loads(fragment)
+                return obj.get("tool_call")
+            except Exception:
+                return None
+        return None
     
     async def process_message(
         self,
@@ -186,9 +227,7 @@ class SupervisorAgent:
         if document_text:
             context_msg = f"""[CONTEXT] The user has uploaded a document. Here's the content:
 
---- DOCUMENT START ---
 {document_text[:3000]}{"..." if len(document_text) > 3000 else ""}
---- DOCUMENT END ---
 """
             query_parts.append(context_msg)
         if instruction_type:
@@ -201,8 +240,36 @@ class SupervisorAgent:
             # Print approximate input tokens for debugging
             approx_inp_tokens = estimate_tokens(full_query)
             print(f"Supervisor: input tokens approx={approx_inp_tokens}")
-            response = await asyncio.to_thread(agent, full_query)
-            assistant_message = str(response)
+            # Ask the agent; if it returns a tool_call, validate its structure and ask for a retry if malformed
+            MAX_RETRIES = 2
+            assistant_message = None
+            response = None
+            for attempt in range(MAX_RETRIES + 1):
+                response = await asyncio.to_thread(agent, full_query)
+                assistant_message = str(response)
+                # If there's no tool_call pattern, accept the response
+                tool_call = self._extract_tool_call(assistant_message)
+                if not tool_call:
+                    break
+                # Validate args is an object
+                args = tool_call.get("args") if isinstance(tool_call, dict) else None
+                if isinstance(args, dict):
+                    break
+                # Otherwise ask the agent to reformat the tool_call
+                if attempt < MAX_RETRIES:
+                    print(f"Supervisor: Detected malformed tool_call, requesting reformat (attempt {attempt+1})")
+                    correction_prompt = (
+                        "Your last response included a tool_call with malformed `args`.\n"
+                        "Please RETURN ONLY a single JSON object with `tool_call` and `args` where `args` is a JSON object (not a string).\n"
+                        "Example: {\"tool_call\": {\"name\": \"generate_backlog\", \"args\": {\"segment_id\":12}}}\n"
+                        "Now re-output the corrected `tool_call` object only."
+                    )
+                    # Use the assistant message as context and ask for a corrected output
+                    full_query = correction_prompt + "\n\nPREVIOUS_RESPONSE:\n" + assistant_message
+                    continue
+                else:
+                    print("Supervisor: Max retries reached for tool_call formatting; proceeding with original response")
+                    break
             conversation_length = len(agent.messages) if hasattr(agent, "messages") else None
             result: Dict[str, Any] = {
                 "response": assistant_message,
