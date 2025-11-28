@@ -1,0 +1,176 @@
+"""
+Combined Retrieval + Backlog Generation Tool
+
+This tool encapsulates both context retrieval (from Pinecone) and backlog generation
+(LLM-based) to minimize conversation payload. It returns only the backlog generation
+result, not the raw retrieval context, to reduce history size.
+
+It can take a segment (id) from runs/<run_id>/segments.jsonl or accept raw segment
+text and intents directly.
+"""
+
+import os
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+from strands import tool
+
+from tools.retrieval_tool import create_retrieval_tool
+from agents.backlog_generation_agent import create_backlog_generation_agent
+
+
+def _safe_json_extract(text: Union[str, Dict[str, Any], List[Any]]) -> Dict[str, Any]:
+    if text is None:
+        return {}
+    if isinstance(text, (dict, list)):
+        return text  # already parsed
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    import re
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return {}
+    return {}
+
+
+def _load_segment_from_file(run_id: str, segment_id: int, segments_file: Optional[str] = None) -> Dict[str, Any]:
+    """Load a segment record from runs/<run_id>/segments.jsonl by id."""
+    file_path = Path(segments_file) if segments_file else Path(f"runs/{run_id}/segments.jsonl")
+    if not file_path.exists():
+        raise FileNotFoundError(f"Segments file not found: {file_path}")
+    with open(file_path, "r") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if int(rec.get("segment_id", -1)) == int(segment_id):
+                return rec
+    raise ValueError(f"Segment with id {segment_id} not found in {file_path}")
+
+
+def create_retrieval_backlog_tool(run_id: str):
+    """
+    Factory to create the combined retrieval + backlog generation tool for a run.
+
+    Returns a Strands tool function that:
+    1) Accepts either raw segment data or a segment_id to read from segments.jsonl
+    2) Performs retrieval using the existing retrieval_tool
+    3) Performs backlog generation using the existing backlog_generation_agent
+    4) Returns ONLY the backlog generation summary (no raw retrieval context in response)
+    """
+
+    retrieval_fn = create_retrieval_tool(run_id)
+    backlog_fn = create_backlog_generation_agent(run_id)
+
+    @tool
+    def generate_backlog_with_retrieval(
+        segment_data: Union[str, Dict[str, Any]] = None,
+        segment_id: Optional[int] = None,
+        segment_text: Optional[str] = None,
+        intent_labels: Optional[List[str]] = None,
+        dominant_intent: Optional[str] = None,
+        segments_file_path: Optional[str] = None,
+    ) -> str:
+        """
+        Generate backlog items for a segment WITH retrieval, returning only generation results.
+
+        Inputs (either provide segment_text/intents OR a segment_id):
+        - segment_id: integer id of segment to load from runs/<run_id>/segments.jsonl
+        - segment_text: raw text of the segment
+        - intent_labels: list of intent labels for the segment
+        - dominant_intent: dominant intent label
+        - segments_file_path: optional override path to segments.jsonl
+
+        You can also pass a single JSON object via segment_data with the same fields.
+
+        Output: JSON string with backlog generation summary (no retrieval payload)
+        """
+        try:
+            # Parse json object if provided
+            if segment_data is not None and all(v is None for v in [segment_id, segment_text, intent_labels, dominant_intent]):
+                data = _safe_json_extract(segment_data)
+                segment_id = data.get("segment_id")
+                segment_text = data.get("segment_text")
+                intent_labels = data.get("intent_labels")
+                dominant_intent = data.get("dominant_intent")
+                segments_file = data.get("segments_file_path") or segments_file_path
+            else:
+                segments_file = segments_file_path
+
+            # If no raw text provided, load from segments.jsonl using segment_id
+            if (not segment_text) and segment_id is not None:
+                rec = _load_segment_from_file(run_id, int(segment_id), segments_file)
+                segment_text = rec.get("raw_text", "")
+                # allow provided intents to override file if supplied
+                intent_labels = intent_labels or rec.get("intent_labels", [])
+                dominant_intent = dominant_intent or rec.get("dominant_intent")
+
+            # Validate required inputs
+            if not segment_text:
+                raise ValueError("Missing segment_text. Provide segment_text directly or a valid segment_id present in segments.jsonl.")
+            intent_labels = intent_labels or []
+            dominant_intent = dominant_intent or (intent_labels[0] if intent_labels else "")
+            seg_id = int(segment_id or 0)
+
+            print(f"Combined Tool: Starting retrieval + generation for segment {seg_id} (run_id: {run_id})")
+
+            # 1) Retrieval (returns JSON string)
+            retrieval_json = retrieval_fn(
+                query_data=None,
+                segment_text=segment_text,
+                intent_labels=intent_labels,
+                dominant_intent=dominant_intent,
+                segment_id=seg_id,
+            )
+            try:
+                retrieved = json.loads(retrieval_json)
+            except Exception:
+                # fail open: use minimal empty context
+                retrieved = {"ado_items": [], "architecture_constraints": []}
+
+            # Optional: store a lightweight retrieval summary to disk (not returned)
+            try:
+                out_dir = Path(f"runs/{run_id}")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                with open(out_dir / f"retrieval_summary_seg_{seg_id}.json", "w") as f:
+                    summary = {
+                        "segment_id": seg_id,
+                        "ado_items_count": len(retrieved.get("ado_items", []) or []),
+                        "architecture_items_count": len(retrieved.get("architecture_constraints", []) or []),
+                    }
+                    json.dump(summary, f)
+            except Exception:
+                pass
+
+            # 2) Backlog generation (returns JSON string) — do NOT include retrieval payload in response
+            gen_result_json = backlog_fn(
+                segment_data=None,
+                segment_id=seg_id,
+                segment_text=segment_text,
+                intent_labels=intent_labels,
+                dominant_intent=dominant_intent,
+                retrieved_context={
+                    "ado_items": retrieved.get("ado_items", []) or [],
+                    "architecture_constraints": retrieved.get("architecture_constraints", []) or [],
+                },
+            )
+
+            # Return generation result directly
+            return gen_result_json
+
+        except Exception as e:
+            err = {
+                "status": "error",
+                "error": f"Combined retrieval+generation failed: {str(e)}",
+                "run_id": run_id,
+            }
+            return json.dumps(err, indent=2)
+
+    return generate_backlog_with_retrieval

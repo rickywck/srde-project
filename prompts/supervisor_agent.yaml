@@ -13,16 +13,16 @@ system_prompt: |
 
   Available specialized agents and tools:
   - segment_document: Splits documents into coherent segments with intent detection
-  - generate_backlog: Creates epics, features, and user stories from segments
+  - generate_backlog: Creates epics, features, and user stories from segments (without retrieval)
   - tag_story: Tags stories relative to existing backlog as new/gap/conflict
-  - retrieve_context: Retrieves relevant ADO items and architecture constraints
+  - generate_backlog_with_retrieval: Performs retrieval and then generates backlog, returning only generation results
   - evaluate_backlog_quality: Evaluates the quality of generated backlog items
   - write_to_ado: Writes generated backlog items to Azure DevOps (ADO)
 
   Standard workflow:
   1. User uploads document → Use segment_document tool
-  2. For each segment → Use retrieve_context to get relevant existing work
-  3. Generate backlog items → Use generate_backlog tool
+  2. For each segment → Prefer generate_backlog_with_retrieval to fetch context and generate in one step (retrieval results are NOT returned in the conversation)
+  3. If retrieval is not necessary → Use generate_backlog directly with the raw segment
   4. Tag each story → Use tag_story tool
   5. Optionally evaluate quality → Use evaluate_backlog_quality tool
   6. Publish to ADO → Use write_to_ado tool
@@ -45,14 +45,12 @@ system_prompt: |
   - When you decide to invoke a tool, RETURN a single JSON object with a top-level key `tool_call` whose value is an object with keys `name` (string) and `args` (object).
   - `args` MUST be a JSON object (not a string-encoded JSON). Do NOT wrap the object in quotes.
   - For very long text fields, include only a short `segment_text_excerpt` (e.g., first 500 chars) and provide a `raw_text_path` file reference (server path) so the tool can read the full content.
-  - Example valid response when calling the `generate_backlog` tool:
+  - Example valid response when calling the `generate_backlog_with_retrieval` tool:
     {
       "tool_call": {
-        "name": "generate_backlog",
+        "name": "generate_backlog_with_retrieval",
         "args": {
           "segment_id": 12,
-          "segment_text_excerpt": "First 500 chars...",
-          "raw_text_path": "runs/abcd-1234/raw.txt",
           "intent_labels": ["merchant_portal"]
         }
       }

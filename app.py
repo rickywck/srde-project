@@ -212,9 +212,9 @@ async def chat(run_id: str, message: ChatMessage):
     
     The supervisor agent orchestrates all specialized tools:
     - segment_document: Document segmentation with intent detection
-    - generate_backlog: Backlog item generation from segments
+    - generate_backlog: Backlog item generation from segments (no retrieval)
     - tag_story: Story classification (new/gap/conflict)
-    - retrieve_context: Retrieval of relevant ADO items and constraints
+    - generate_backlog_with_retrieval: Combined retrieval + backlog generation (retrieval results not returned)
     - evaluate_backlog_quality: LLM-as-judge quality evaluation
     
     The supervisor uses Strands Agent to decide which tools to invoke based on user message.
