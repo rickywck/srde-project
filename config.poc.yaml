@@ -20,12 +20,11 @@ retrieval:
     top_k: 5
     min_similarity_threshold: 0.5
   architecture:
-    top_k: 
+    top_k: 5
     min_similarity_threshold: 0.5
   tagging:
     min_similarity_threshold: 0.5
 
-project: {}
 
 generation:
   max_ado_in_prompt: 6

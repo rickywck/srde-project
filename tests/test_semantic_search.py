@@ -226,12 +226,14 @@ def searcher(config):
     pinecone_client = Pinecone(api_key=pinecone_api_key)
     openai_client = OpenAI(api_key=openai_api_key)
     
+    # Use ADO-specific similarity threshold for ADO-focused searches used in tests.
+    ado_min_sim = config.get('retrieval', {}).get('ado', {}).get('min_similarity_threshold', 0.7)
     return SemanticSearcher(
         pinecone_client=pinecone_client,
         openai_client=openai_client,
         index_name=config['pinecone']['index_name'],
         embedding_model=config['openai']['embedding_model'],
-        min_similarity=config['retrieval']['min_similarity_threshold']
+        min_similarity=ado_min_sim
     )
 
 
@@ -251,7 +253,7 @@ class TestSemanticSearch:
     def test_search_ado_items(self, searcher, config):
         """Test searching for ADO backlog items."""
         query = "user login authentication"
-        namespace = config['project']['name']
+        namespace = config['pinecone']['project']
         
         results = searcher.search_ado_items(query, namespace, top_k=5)
         
@@ -267,7 +269,7 @@ class TestSemanticSearch:
     def test_search_architecture(self, searcher, config):
         """Test searching for architecture constraints."""
         query = "security requirements authentication"
-        namespace = config['project']['name']
+        namespace = config['pinecone']['project']
         
         results = searcher.search_architecture(query, namespace, top_k=5)
         
@@ -283,7 +285,7 @@ class TestSemanticSearch:
     def test_search_combined(self, searcher, config):
         """Test combined search for both ADO and architecture."""
         query = "implement user authentication with OAuth2"
-        namespace = config['project']['name']
+        namespace = config['pinecone']['project']
         
         results = searcher.search_combined(query, namespace)
         
@@ -296,7 +298,7 @@ class TestSemanticSearch:
         """Test that results below similarity threshold are filtered out."""
         # Use a very specific query unlikely to have high similarity matches
         query = "xyz123 nonexistent feature abc789"
-        namespace = config['project']['name']
+        namespace = config['pinecone']['project']
         
         results = searcher.search_ado_items(query, namespace, top_k=10)
         
@@ -307,7 +309,7 @@ class TestSemanticSearch:
     def test_empty_query(self, searcher, config):
         """Test handling of empty query."""
         query = ""
-        namespace = config['project']['name']
+        namespace = config['pinecone']['project']
         
         # Should not raise an error
         results = searcher.search_ado_items(query, namespace)
@@ -323,7 +325,7 @@ class TestSemanticSearch:
         # Build intent query (as described in 5.2)
         intent_query = f"{dominant_intent} {' '.join(intent_labels)} {segment_text[:300]}"
         
-        namespace = config['project']['name']
+        namespace = config['pinecone']['project']
         results = searcher.search_combined(intent_query, namespace)
         
         assert "ado_items" in results
@@ -353,7 +355,7 @@ def manual_test():
         openai_client=openai_client,
         index_name=config['pinecone']['index_name'],
         embedding_model=config['openai']['embedding_model'],
-        min_similarity=config['retrieval']['min_similarity_threshold']
+        min_similarity=config.get('retrieval', {}).get('ado', {}).get('min_similarity_threshold', 0.7)
     )
     
     # Test query

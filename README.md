@@ -327,6 +327,13 @@ Two workflow implementations provide flexibility:
    - User Stories (actionable work items with acceptance criteria)
 4. Embeds traceability and context from source document
 
+#### New: Combined Retrieval + Generation Tool
+
+- Tool name: generate_backlog_with_retrieval
+- Purpose: Performs retrieval and backlog generation in a single tool call and returns only the generation result (retrieval payload is not returned), reducing conversation history size
+- Typical usage: Provide a segment_id (read from runs/<run_id>/segments.jsonl) and optional intent labels. The tool loads the segment, runs retrieval, then calls the backlog generator with the retrieved context.
+- When to use: Prefer this tool for most segment-based generation. Use generate_backlog when you explicitly want to generate directly from input text without RAG.
+
 ### Tagging & Classification
 
 1. Analyzes generated stories against existing backlog
