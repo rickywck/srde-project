@@ -14,6 +14,7 @@ const uploadBox = document.getElementById('uploadBox');
 const runIdDisplay = document.getElementById('runIdDisplay');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+const loadingSpinner = document.getElementById('loadingSpinner');
 const tokenInfo = document.getElementById('tokenInfo');
 const runsList = document.getElementById('runsList');
 const modelSelect = document.getElementById('modelSelect');
@@ -956,10 +957,15 @@ function setBusy(busy, message = 'Ready') {
     
     if (busy) {
         statusDot.classList.add('busy');
+        if (loadingSpinner) loadingSpinner.style.display = 'inline-block';
+        // Update send button to show small spinner and processing label
+        if (sendBtn) sendBtn.innerHTML = `<span class="loading" style="width:14px;height:14px;border-width:2px;margin-right:8px;"></span>Processing...`;
         sendBtn.disabled = true;
         messageInput.disabled = true;
     } else {
         statusDot.classList.remove('busy');
+        if (loadingSpinner) loadingSpinner.style.display = 'none';
+        if (sendBtn) sendBtn.textContent = 'Send';
         // Always re-enable chat inputs (no longer requires Quick Actions upload)
         sendBtn.disabled = false;
         messageInput.disabled = false;
