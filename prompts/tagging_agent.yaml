@@ -1,5 +1,5 @@
 name: tagging_agent
-description: Classify user stories relative to existing backlog (new/gap/conflict)
+description: Classify user stories relative to existing backlog (new/gap/conflict). If story fields are omitted, provide run_id and segment_id and the agent will load the corresponding user story from runs/<run_id>/generated_backlog.jsonl.
 version: 1.0
 
 system_prompt: |
@@ -35,5 +35,5 @@ user_prompt_template: |
   Decide single tag (new|gap|conflict). Provide concise reason (<= 20 words). Output JSON only.
 
 parameters:
-  temperature: 0.2
-  max_tokens: 500
+  # Use max_completion_tokens for OpenAI Responses API compatibility
+  max_completion_tokens: 500

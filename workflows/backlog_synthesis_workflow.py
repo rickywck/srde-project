@@ -18,6 +18,7 @@ from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
 from agents.evaluation_agent import create_evaluation_agent
 from tools.retrieval_tool import create_retrieval_tool
+from services.similar_story_retriever import SimilarStoryRetriever
 
 
 class BacklogSynthesisWorkflow:
@@ -50,6 +51,7 @@ class BacklogSynthesisWorkflow:
         self._openai_client = None
         self._pinecone_client = None
         self._index = None
+        self._similar_retriever: Optional[SimilarStoryRetriever] = None
         
         # Workflow state
         self.results = {
@@ -88,6 +90,17 @@ class BacklogSynthesisWorkflow:
         if self._index is None and self.pinecone_client:
             self._index = self.pinecone_client.Index(self.index_name)
         return self._index
+
+    @property
+    def similar_retriever(self) -> SimilarStoryRetriever:
+        """Lazy initialization of shared similar story retriever"""
+        if self._similar_retriever is None:
+            self._similar_retriever = SimilarStoryRetriever(
+                config=self.config,
+                min_similarity=self.min_similarity,
+                log_fn=lambda msg: self.log_progress(msg, save_to_history=False),
+            )
+        return self._similar_retriever
     
     def log_progress(self, message: str, save_to_history: bool = True):
         """Log workflow progress"""
@@ -247,51 +260,9 @@ class BacklogSynthesisWorkflow:
         self.log_progress(f"✓ Tagged {len(stories)} stories: {tag_counts}")
     
     def _find_similar_stories(self, story: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Find similar existing stories using vector similarity search"""
-        if not self.openai_client or not self.index:
-            return []
-        
-        # Build story text for embedding
-        ac = story.get("acceptance_criteria", []) or []
-        story_text = story.get("title", "") + "\n" + story.get("description", "") + "\n" + "\n".join(ac)
-        
+        """Find similar existing stories using the shared retriever class"""
         try:
-            # Generate embedding
-            emb_resp = self.openai_client.embeddings.create(
-                model=self.embedding_model,
-                input=story_text[:3000],
-                dimensions=self.embedding_dimensions
-            )
-            vec = emb_resp.data[0].embedding
-            
-            # Query Pinecone (use namespace if configured) with metadata filter
-            query_kwargs = {
-                "vector": vec,
-                "top_k": 10,
-                "filter": {"doc_type": "ado_backlog"},
-                "include_metadata": True,
-            }
-            if self.pinecone_namespace:
-                query_kwargs["namespace"] = self.pinecone_namespace
-            query_res = self.index.query(**query_kwargs)
-            
-            # Filter by similarity threshold and type
-            similar_stories = []
-            for match in query_res.get("matches", []):
-                score = match.get("score", 0)
-                if score >= self.min_similarity:
-                    md = match.get("metadata", {})
-                    item_type = (md.get("type") or md.get("work_item_type") or "").lower()
-                    if "story" in item_type:
-                        similar_stories.append({
-                            "work_item_id": md.get("work_item_id") or match.get("id"),
-                            "title": md.get("title", ""),
-                            "description": md.get("description", "")[:500],
-                            "similarity": score
-                        })
-            
-            return similar_stories
-            
+            return self.similar_retriever.find_similar_stories(story, min_similarity=self.min_similarity)
         except Exception as e:
             self.log_progress(f"⚠ Similar story search failed: {str(e)}", save_to_history=False)
             return []
