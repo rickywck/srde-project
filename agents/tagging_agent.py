@@ -161,8 +161,35 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         # per-call when caller supplies a backlog path or a run path string.
         current_out_dir = Path(f"runs/{run_id}")
         is_subcall = False
+        # Track whether this invocation has initialized (overwritten) the tag file.
+        out_file_initialized = False
+        # Track which stories have been written in this agent invocation to avoid duplicates.
+        processed_story_keys = set()
+
+        def _load_existing_processed_keys(out_dir: Path) -> set:
+            keys = set()
+            try:
+                tag_file = out_dir / "tagging.jsonl"
+                if tag_file.exists():
+                    with open(tag_file, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                                k = str(obj.get("story_internal_id") or obj.get("story_title") or "")
+                                if k:
+                                    keys.add(k)
+                            except Exception:
+                                continue
+            except Exception:
+                pass
+            return keys
 
         def _finalize(result: Dict[str, Any], internal_id: Any = None, title: str = None) -> str:
+            nonlocal out_file_initialized
+            nonlocal processed_story_keys
             if internal_id:
                 result["story_internal_id"] = internal_id
             if title:
@@ -173,8 +200,30 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 out_dir = current_out_dir
                 out_dir.mkdir(parents=True, exist_ok=True)
                 tag_file = out_dir / "tagging.jsonl"
-                with open(tag_file, "a") as f:
+                # Avoid writing duplicate entries for the same story within
+                # a single agent invocation. Use internal_id if available,
+                # otherwise use title as the key.
+                key = None
+                try:
+                    key = str(internal_id) if internal_id is not None else (str(title) if title is not None else None)
+                except Exception:
+                    key = None
+                if key is not None and key in processed_story_keys:
+                    # Already written this story in this run; skip writing again.
+                    return json.dumps(result)
+
+                # If this is a top-level invocation and we haven't yet initialized
+                # the tagging file for this run, open in write mode to overwrite
+                # previous contents. Subsequent writes append.
+                mode = "a"
+                if not is_subcall and not out_file_initialized:
+                    mode = "w"
+                    out_file_initialized = True
+                with open(tag_file, mode) as f:
                     f.write(json.dumps(result) + "\n")
+
+                if key is not None:
+                    processed_story_keys.add(key)
             except Exception:
                 pass # Silently fail on logging errors to preserve flow
                 
@@ -214,6 +263,44 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 "similar_existing_stories": similar_existing_stories or [],
                 "similarity_threshold": similarity_threshold if similarity_threshold is not None else default_similarity_threshold,
             }
+
+        # Small validator: detect when callers accidentally pass filesystem paths
+        # inside the `story` field (common when orchestration passes run paths).
+        def _looks_like_filesystem_path(v: Any) -> bool:
+            try:
+                if not v:
+                    return False
+                if isinstance(v, str):
+                    s = v.strip()
+                    # obvious file extensions or path separators
+                    if s.endswith('.jsonl') or s.endswith('.json'):
+                        return True
+                    if '/' in s or '\\' in s:
+                        return True
+                    return False
+                return False
+            except Exception:
+                return False
+
+        story_candidate = payload.get("story")
+        if _looks_like_filesystem_path(story_candidate):
+            return json.dumps({
+                "status": "error",
+                "run_id": run_id,
+                "message": "It looks like you passed a filesystem path or filename in the 'story' field.\nProvide a story object with 'title' and 'description', or pass 'run_id'/'backlog_path' to reference a run. See 'prompts/tagging_agent.yaml' examples.",
+            })
+
+        # If story is a dict but the title/description are path-like and description is missing,
+        # assume caller mistakenly put a path into the title field and return a helpful error.
+        if isinstance(story_candidate, dict):
+            title_val = story_candidate.get("title") or ""
+            desc_val = story_candidate.get("description") or ""
+            if _looks_like_filesystem_path(title_val) and not desc_val:
+                return json.dumps({
+                    "status": "error",
+                    "run_id": run_id,
+                    "message": "The story 'title' looks like a filesystem path and no description was provided.\nProvide a proper story object (title + description) or use 'run_id'/'backlog_path' to point to a run's backlog.",
+                })
 
         # Helper: Resolve backlog file path and output directory from payload arguments.
         def _resolve_io_context(_payload: Dict[str, Any]):
@@ -260,14 +347,21 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             resolved_backlog_path = Path(f"runs/{run_id}") / GENERATED_BACKLOG_FILENAME
             current_out_dir = Path(f"runs/{run_id}")
 
-        # If this is a top-level call, clean previous tagging results for this output dir
-        if not is_subcall:
+        # Seed processed keys with existing file contents to prevent duplicate writes
+        try:
+            processed_story_keys = _load_existing_processed_keys(current_out_dir)
+        except Exception:
+            processed_story_keys = set()
+
+        # Optionally reset the tagging file only when explicitly requested
+        if not is_subcall and payload.get("__reset", False):
             try:
                 current_out_dir.mkdir(parents=True, exist_ok=True)
                 tag_file_path = current_out_dir / "tagging.jsonl"
-                # Overwrite to start fresh
                 with open(tag_file_path, "w") as f:
                     f.write("")
+                # after reset, clear in-memory keys as well
+                processed_story_keys = set()
             except Exception:
                 pass
 
@@ -389,6 +483,48 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         story = payload.get("story", {})
         similar = payload.get("similar_existing_stories", [])
         threshold = float(payload.get("similarity_threshold", default_similarity_threshold))
+
+        # Normalize similar stories structure
+        if isinstance(similar, dict):
+            similar = [similar]
+        elif not isinstance(similar, list):
+            similar = []
+
+        # Helper to merge two similar-story lists into a unique set by work_item_id or title/desc
+        def _merge_similar_sets(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            merged: Dict[str, Dict[str, Any]] = {}
+            def _make_key(item: Dict[str, Any]) -> str:
+                wid = item.get("work_item_id")
+                if wid is not None:
+                    return f"id:{wid}"
+                # fallback key using title + snippet of desc
+                t = (item.get("title") or "").strip().lower()
+                d = (item.get("description") or "").strip().lower()[:80]
+                return f"td:{t}|{d}"
+            def _merge(dst: Dict[str, Any], src: Dict[str, Any]):
+                # keep max similarity
+                try:
+                    dst["similarity"] = max(dst.get("similarity", 0.0), src.get("similarity", 0.0))
+                except Exception:
+                    pass
+                # prefer non-empty title/desc from either side
+                if not dst.get("title") and src.get("title"):
+                    dst["title"] = src.get("title")
+                if not dst.get("description") and src.get("description"):
+                    dst["description"] = src.get("description")
+                if not dst.get("work_item_id") and src.get("work_item_id"):
+                    dst["work_item_id"] = src.get("work_item_id")
+
+            for item in (a or []) + (b or []):
+                if not isinstance(item, dict):
+                    continue
+                key = _make_key(item)
+                if key in merged:
+                    _merge(merged[key], item)
+                else:
+                    merged[key] = dict(item)
+            # sort by similarity desc for nicer prompt ordering
+            return sorted(merged.values(), key=lambda x: x.get("similarity", 0.0), reverse=True)
 
         # Multi-story handling: if the incoming story is a list or payload has a 'stories' list,
         # process each story individually and aggregate results.
@@ -632,12 +768,14 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         # Log story title and description for troubleshooting
         print(f"Tagging Agent: Processing story title='{title}' | description='{story.get('description', '')[:120]}…'")
 
-        # If caller didn't provide similar stories, perform internal retrieval using shared retriever
-        if not similar:
+        # If caller didn't provide similar stories or provided too few, perform internal retrieval,
+        # then merge with any provided list to ensure we always tag against the full set.
+        need_retrieval = (not similar) or (isinstance(similar, list) and len(similar) < 2)
+        if need_retrieval:
             try:
                 print("Tagging Agent: No similar stories provided; performing internal retrieval…")
                 retriever = SimilarStoryRetriever(config=_cfg, min_similarity=threshold)
-                similar = retriever.find_similar_stories(
+                retrieved = retriever.find_similar_stories(
                     {
                         "title": story.get("title", ""),
                         "description": story.get("description", ""),
@@ -645,12 +783,15 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     },
                     min_similarity=threshold,
                 )
-                print(f"Tagging Agent: Internal retrieval found {len(similar)} similar stories")
+                # Merge provided and retrieved for completeness
+                similar = _merge_similar_sets(similar, retrieved)
+                print(f"Tagging Agent: Internal retrieval found {len(similar)} similar stories (after merge)")
             except Exception as e:
                 print(f"Tagging Agent: Internal retrieval failed: {e}")
 
         # Early exit if no similar above threshold
-        above_threshold = [s for s in similar if s.get("similarity", 0.0) >= threshold]
+        # Ensure we evaluate against all available similar stories above threshold
+        above_threshold = [s for s in (similar or []) if s.get("similarity", 0.0) >= threshold]
         if not above_threshold:
             return _finalize({
                 "status": "ok",

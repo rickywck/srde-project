@@ -1,11 +1,36 @@
 name: tagging_agent
-description: Classify user stories relative to existing backlog (new/gap/conflict). If story fields are omitted, provide run_id and segment_id and the agent will load the corresponding user story from runs/<run_id>/generated_backlog.jsonl.
+description: |
+  Classify user stories relative to existing backlog (new/gap/conflict).
+
+  IMPORTANT: When calling this tool, always provide the `story` argument as a JSON
+  object with keys: `title` (string), `description` (string), and
+  `acceptance_criteria` (list). Do NOT pass a filesystem path (for example
+  "runs/<id>/generated_backlog.jsonl") in the `story` field. If you need to
+  reference an existing run, pass `run_id` as a plain identifier (UUID) or use
+  the explicit `backlog_path` parameter.
+
+  Valid example call shapes:
+    - {"story": {"title":"...", "description":"...", "acceptance_criteria":["..."]}}
+    - {"stories": [{...}, {...}]}
+    - {"run_id": "75e7a26f-..."}
+    - {"backlog_path": "runs/<id>/generated_backlog.jsonl"}  # allowed for fallback only
+
+  If a caller places a filesystem path into the `story` payload, the tool will
+  try to interpret it (fallback) but this is discouraged. Prefer passing story
+  objects or plain `run_id` instead.
 version: 1.0
 
 system_prompt: |
   You are a backlog tagging specialist.
   Classify ONE generated user story relative to existing backlog items.
   Return STRICT JSON ONLY with fields: decision_tag, related_ids, reason.
+
+  IMPORTANT TOOL USAGE GUIDELINES (for any agent that will call this tool):
+  - Do NOT pass filesystem paths as the `story` payload.
+  - Always pass story data as a JSON object with `title` and `description`.
+  - If referencing a run, pass `run_id` as a simple identifier (UUID) or use `backlog_path` explicitly.
+  - If you have only a file path, call the tool with {"backlog_path":"<path>"}
+    rather than putting the path into `story`.
 
   Taxonomy:
   - new: No meaningful overlap; introduces novel scope.

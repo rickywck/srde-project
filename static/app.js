@@ -600,6 +600,11 @@ async function sendMessage() {
                 addMessage('assistant', data.response);
             }
             await loadBacklog();
+        } else if (data && data.response_type === 'tagging') {
+            if (data.response) {
+                addMessage('assistant', data.response);
+            }
+            await loadTagging();
         } else if (data && data.response_type === 'ado_export') {
             if (data.response) {
                 addMessage('assistant', data.response);
@@ -932,6 +937,13 @@ async function generateBacklogWorkflow() {
             }
             
             addMessage('system', statusMsg);
+
+            // If tagging succeeded as part of the workflow, automatically display tagging results
+            try {
+                if (steps.tagging && steps.tagging.status === 'success') {
+                    await loadTagging();
+                }
+            } catch (_) { /* ignore */ }
         }
         
         // Display counts summary

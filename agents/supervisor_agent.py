@@ -158,12 +158,16 @@ class SupervisorAgent:
         run_dir = runs_dir / run_id
         backlog_file = run_dir / "generated_backlog.jsonl"
         ado_result_file = run_dir / "ado_export_last.json"
+        tagging_file = run_dir / "tagging.jsonl"
         backlog_existed_before = backlog_file.exists()
         backlog_mtime_before = backlog_file.stat().st_mtime if backlog_existed_before else None
         backlog_size_before = backlog_file.stat().st_size if backlog_existed_before else None
         ado_existed_before = ado_result_file.exists()
         ado_mtime_before = ado_result_file.stat().st_mtime if ado_existed_before else None
         ado_size_before = ado_result_file.stat().st_size if ado_existed_before else None
+        tagging_existed_before = tagging_file.exists()
+        tagging_mtime_before = tagging_file.stat().st_mtime if tagging_existed_before else None
+        tagging_size_before = tagging_file.stat().st_size if tagging_existed_before else None
 
         # Determine model to use (override > config default)
         default_model = self.config.get("openai", {}).get("chat_model", os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"))
@@ -300,7 +304,13 @@ class SupervisorAgent:
                     as_after = ado_result_file.stat().st_size
                     if (not ado_existed_before) or (am_after != ado_mtime_before) or (as_after != ado_size_before):
                         result["response_type"] = "ado_export"
-                # If not ADO, detect backlog generation/update
+                # If not ADO, detect tagging completion/update first (so tagging view wins over backlog when both happen)
+                if "response_type" not in result and tagging_file.exists():
+                    tm_after = tagging_file.stat().st_mtime
+                    ts_after = tagging_file.stat().st_size
+                    if (not tagging_existed_before) or (tm_after != tagging_mtime_before) or (ts_after != tagging_size_before):
+                        result["response_type"] = "tagging"
+                # If not ADO or tagging, detect backlog generation/update
                 if "response_type" not in result and backlog_file.exists():
                     mtime_after = backlog_file.stat().st_mtime
                     size_after = backlog_file.stat().st_size
