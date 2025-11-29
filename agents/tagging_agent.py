@@ -352,26 +352,17 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             resolved_backlog_path = Path(f"runs/{run_id}") / GENERATED_BACKLOG_FILENAME
             current_out_dir = Path(f"runs/{run_id}")
 
-        # For top-level calls (not internal subcalls) we overwrite the tagging file
-        # so each tagging run starts fresh. For internal subcalls, seed processed
-        # keys from the existing file to avoid duplicate writes within the same run.
-        if not is_subcall:
-            try:
-                current_out_dir.mkdir(parents=True, exist_ok=True)
-                tag_file_path = current_out_dir / "tagging.jsonl"
-                # Truncate/overwrite previous results for a fresh run
-                with open(tag_file_path, "w") as f:
-                    f.write("")
-                processed_story_keys = set()
-                # Mark file as initialized so _finalize will append subsequent writes
+        # Always seed from existing file to ensure idempotency across multiple
+        # invocations (e.g., when the chatbot triggers tagging more than once).
+        # Do NOT truncate the file here; instead, skip duplicates on write.
+        try:
+            current_out_dir.mkdir(parents=True, exist_ok=True)
+            processed_story_keys = _load_existing_processed_keys(current_out_dir)
+            # Ensure we append by default for top-level as well
+            if not is_subcall:
                 out_file_initialized = True
-            except Exception:
-                processed_story_keys = set()
-        else:
-            try:
-                processed_story_keys = _load_existing_processed_keys(current_out_dir)
-            except Exception:
-                processed_story_keys = set()
+        except Exception:
+            processed_story_keys = set()
 
         # If no payload content was supplied at all (chat invoked without args),
         # attempt batch tagging from the current run's generated backlog file.
@@ -534,16 +525,25 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             # sort by similarity desc for nicer prompt ordering
             return sorted(merged.values(), key=lambda x: x.get("similarity", 0.0), reverse=True)
 
-        # Multi-story handling: if the incoming story is a list or payload has a list of backlog items,
-        # process each story individually and aggregate results. Support multiple common keys used by LLMs.
+        # Multi-story handling: Only when no explicit single story is provided.
+        def _has_explicit_single_story(s: Dict[str, Any]) -> bool:
+            return isinstance(s, dict) and (
+                bool(s.get("title")) or bool(s.get("description")) or bool(s.get("internal_id")) or bool(s.get("segment_id"))
+            )
+
         if (
             isinstance(story, list)
-            or isinstance(payload.get("stories"), list)
-            or isinstance(payload.get("user_stories"), list)
-            or isinstance(payload.get("items"), list)
-            or isinstance(payload.get("backlog_items"), list)
-            or isinstance(payload.get("work_items"), list)
-            or isinstance(payload.get("backlog"), list)
+            or (
+                not _has_explicit_single_story(story)
+                and (
+                    isinstance(payload.get("stories"), list)
+                    or isinstance(payload.get("user_stories"), list)
+                    or isinstance(payload.get("items"), list)
+                    or isinstance(payload.get("backlog_items"), list)
+                    or isinstance(payload.get("work_items"), list)
+                    or isinstance(payload.get("backlog"), list)
+                )
+            )
         ):
             raw_list = (
                 story if isinstance(story, list)
@@ -684,10 +684,10 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 return True
             return not (s.get("title") or s.get("description"))
 
-        # If story fields are empty but caller supplied run_id/segment_id or a backlog_path,
-        # run batch tagging over all user stories in the generated backlog file
-        # for the provided run/path (ignoring segment_id), mirroring the multi-story behavior.
-        if _is_empty_story(story) and (payload.get("run_id") or payload.get("segment_id") or payload.get("backlog_path")):
+        # If story fields are empty and caller explicitly requested batch mode,
+        # run batch tagging over all user stories in the generated backlog file.
+        # This avoids accidental batch runs when chat passes run_id/segment_id for context.
+        if _is_empty_story(story) and bool(payload.get("__batch")):
             try:
                 # Reuse resolved context
                 backlog_file = resolved_backlog_path

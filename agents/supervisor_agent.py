@@ -12,6 +12,8 @@ from strands import Agent
 from strands.models.openai import OpenAIModel
 from strands.telemetry import StrandsTelemetry
 from strands.session.file_session_manager import FileSessionManager
+from .model_factory import ModelFactory
+import logging
 
 # Import specialized agents and tools
 from agents.segmentation_agent import create_segmentation_agent
@@ -51,7 +53,14 @@ class SupervisorAgent:
     
     def __init__(self, config_path: str = "config.poc.yaml", sessions_dir: str = "sessions"):
         """Initialize supervisor with configuration and session management"""
-        self.config = self._load_config(config_path)
+        # Use ModelFactory to load config for consistency
+        try:
+            self.config = ModelFactory._load_config(config_path)
+        except Exception:
+            self.config = self._load_config(config_path)
+
+        # Module logger
+        self.logger = logging.getLogger(__name__)
 
         # Initialize OpenAI configuration
         api_key = os.getenv(self.config["openai"]["api_key_env_var"])
@@ -66,20 +75,40 @@ class SupervisorAgent:
         prompt_loader = get_prompt_loader()
         prompt_config = prompt_loader.load_prompt("supervisor_agent")
         self.system_prompt = prompt_loader.get_system_prompt("supervisor_agent")
-        raw_model_params = prompt_loader.get_parameters("supervisor_agent")
-        # Sanitize model params for newer OpenAI models: drop temperature, map token key
-        mapped_max = (
-            raw_model_params.get("max_completion_tokens")
-            or raw_model_params.get("max_output_tokens")
-            or raw_model_params.get("max_tokens")
-        )
-        model_params = {"max_completion_tokens": mapped_max or 1500}
+        raw_model_params = prompt_loader.get_parameters("supervisor_agent") or {}
 
-        # Initialize OpenAI model for Strands
-        self.model = OpenAIModel(
-            model_id=self.config["openai"]["chat_model"],
-            params=model_params
-        )
+        # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
+        agent_max_tokens = raw_model_params.get("max_completion_tokens") or raw_model_params.get("max_output_tokens") or raw_model_params.get("max_tokens")
+        app_max_tokens = self.config.get("openai", {}).get("max_tokens")
+        if agent_max_tokens is not None:
+            eff_max_tokens = int(agent_max_tokens)
+        elif app_max_tokens is not None:
+            eff_max_tokens = int(app_max_tokens)
+        else:
+            eff_max_tokens = None
+
+        model_params = {}
+        if eff_max_tokens is not None:
+            model_params["max_completion_tokens"] = eff_max_tokens
+
+        # Initialize OpenAI model for Strands via ModelFactory
+        try:
+            model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
+            self.model = model_descriptor
+            # expose model id for compatibility
+            try:
+                self.config["openai"]["chat_model"] = getattr(model_descriptor, "model_id", self.config.get("openai", {}).get("chat_model"))
+            except Exception:
+                pass
+        except Exception as e:
+            # Fallback to direct OpenAIModel creation (best-effort)
+            self.logger = logging.getLogger(__name__)
+            self.logger.exception("ModelFactory failed to create model for supervisor: %s", e)
+            fallback_model_id = ModelFactory.get_default_model_id(config_path)
+            try:
+                self.model = OpenAIModel(model_id=fallback_model_id, params=(model_params if model_params else None))
+            except Exception:
+                self.model = None
 
         # Session management
         self.sessions_dir = sessions_dir
@@ -144,6 +173,8 @@ class SupervisorAgent:
             except Exception:
                 return None
         return None
+
+    
     
     async def process_message(
         self,
@@ -200,18 +231,27 @@ class SupervisorAgent:
             evaluation_agent = create_evaluation_agent(run_id)
             ado_writer_tool = create_ado_writer_tool(run_id)
 
-            # Create a model instance for this session
-            # Use the same sanitized params for the session model
-            _raw_params = get_prompt_loader().get_parameters("supervisor_agent")
-            _mapped_max = (
-                _raw_params.get("max_completion_tokens")
-                or _raw_params.get("max_output_tokens")
-                or _raw_params.get("max_tokens")
-            )
-            session_model = OpenAIModel(
-                model_id=model_id,
-                params={"max_completion_tokens": _mapped_max or 1500}
-            )
+            # Create a model instance for this session via ModelFactory (no hardcoded token default)
+            _raw_params = get_prompt_loader().get_parameters("supervisor_agent") or {}
+            _agent_max = _raw_params.get("max_completion_tokens") or _raw_params.get("max_output_tokens") or _raw_params.get("max_tokens")
+            _app_max = self.config.get("openai", {}).get("max_tokens")
+            if _agent_max is not None:
+                _eff = int(_agent_max)
+            elif _app_max is not None:
+                _eff = int(_app_max)
+            else:
+                _eff = None
+            session_model_params = {}
+            if _eff is not None:
+                session_model_params["max_completion_tokens"] = _eff
+            try:
+                session_model = ModelFactory.create_openai_model(config_path=config_path, model_params=session_model_params, model_id_override=model_id)
+            except Exception:
+                # best-effort fallback
+                try:
+                    session_model = OpenAIModel(model_id=model_id, params=(session_model_params if session_model_params else None))
+                except Exception:
+                    session_model = None
 
             agent = Agent(
                 model=session_model,
@@ -240,6 +280,7 @@ class SupervisorAgent:
             self.agents_cache[run_id] = agent
             self.agent_models[run_id] = model_id
 
+
         # Build context-aware query for the agent
         query_parts = []
         if document_text:
@@ -255,9 +296,9 @@ class SupervisorAgent:
 
         try:
             # Run agent in thread for async compatibility
-            # Print approximate input tokens for debugging
+            # Log approximate input tokens for debugging
             approx_inp_tokens = estimate_tokens(full_query)
-            print(f"Supervisor: input tokens approx={approx_inp_tokens}")
+            self.logger.info("Supervisor: input tokens approx=%s", approx_inp_tokens)
             # Ask the agent; if it returns a tool_call, validate its structure and ask for a retry if malformed
             MAX_RETRIES = 2
             assistant_message = None
@@ -275,7 +316,7 @@ class SupervisorAgent:
                     break
                 # Otherwise ask the agent to reformat the tool_call
                 if attempt < MAX_RETRIES:
-                    print(f"Supervisor: Detected malformed tool_call, requesting reformat (attempt {attempt+1})")
+                    self.logger.warning("Supervisor: Detected malformed tool_call, requesting reformat (attempt %s)", attempt+1)
                     correction_prompt = (
                         "Your last response included a tool_call with malformed `args`.\n"
                         "Please RETURN ONLY a single JSON object with `tool_call` and `args` where `args` is a JSON object (not a string).\n"
@@ -286,7 +327,7 @@ class SupervisorAgent:
                     full_query = correction_prompt + "\n\nPREVIOUS_RESPONSE:\n" + assistant_message
                     continue
                 else:
-                    print("Supervisor: Max retries reached for tool_call formatting; proceeding with original response")
+                    self.logger.warning("Supervisor: Max retries reached for tool_call formatting; proceeding with original response")
                     break
             conversation_length = len(agent.messages) if hasattr(agent, "messages") else None
             result: Dict[str, Any] = {
