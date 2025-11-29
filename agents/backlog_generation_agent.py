@@ -44,28 +44,61 @@ def create_backlog_generation_agent(run_id: str):
     # We'll create a lightweight model descriptor from the factory so we can
     # consistently obtain the model id and mapped params below.
 
-    # Generation limits from config
-    gen_cfg = _cfg.get("generation", {}) if isinstance(_cfg, dict) else {}
+    # Generation limits from prompt parameters (loaded later, but defaults needed here if we want to use them before prompt loader?)
+    # Actually, we should load prompt parameters earlier or move this logic down.
+    # Let's move the prompt loading up.
+    
+    # Load prompts from external configuration
+    prompt_loader = get_prompt_loader()
+    system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
+    # Merge prompt parameters with any params provided by the factory (factory wins)
+    prompt_params = prompt_loader.get_parameters("backlog_generation_agent") or {}
+
     def _as_int(v, d):
         try:
             i = int(v)
             return i if i > 0 else d
         except Exception:
             return d
-    MAX_ADO = _as_int(gen_cfg.get("max_ado_in_prompt", 6), 6)
-    MAX_ARCH = _as_int(gen_cfg.get("max_arch_in_prompt", 6), 6)
-    ADO_DESC_LEN = _as_int(gen_cfg.get("ado_desc_len", 400), 400)
-    ARCH_TEXT_LEN = _as_int(gen_cfg.get("arch_text_len", 600), 600)
-    # Prefer new Responses-style token key; fall back to legacy if present
-    CFG_MAX_TOKENS = _as_int(
-        gen_cfg.get("max_completion_tokens", gen_cfg.get("max_tokens", 1500)),
-        1500,
-    )
+
+    MAX_ADO = _as_int(prompt_params.get("max_ado_in_prompt", 6), 6)
+    MAX_ARCH = _as_int(prompt_params.get("max_arch_in_prompt", 6), 6)
+    ADO_DESC_LEN = _as_int(prompt_params.get("ado_desc_len", 400), 400)
+    ARCH_TEXT_LEN = _as_int(prompt_params.get("arch_text_len", 600), 600)
     
+    # Determine effective max tokens
+    # Priority: Agent Config > App Config > Model Default (None)
+    
+    # 1. Agent Config
+    agent_max_tokens = prompt_params.get("max_completion_tokens") or prompt_params.get("max_tokens")
+    
+    # 2. App Config
+    # We need to check if there is an app level max token setting. 
+    # The user mentioned "application level maximum" but we removed 'generation' section.
+    # Assuming there might be a global setting in 'openai' section or similar, but looking at config.poc.yaml, there isn't one explicitly for max tokens in 'openai' section.
+    # However, let's check if _cfg has anything relevant or if we should just rely on agent config.
+    # The user said "if max token is not defined in both configuration, will use the model default".
+    # So we check _cfg for a fallback if agent_max_tokens is None.
+    # Since we removed 'generation' section, maybe it's in 'openai' section?
+    # The current config.poc.yaml 'openai' section doesn't have it.
+    # So effectively, if not in agent config, it's None (Model Default).
+    
+    app_max_tokens = _cfg.get("openai", {}).get("max_tokens") # Hypothetical app level config
+    
+    if agent_max_tokens is not None:
+        eff_max_tokens = int(agent_max_tokens)
+    elif app_max_tokens is not None:
+        eff_max_tokens = int(app_max_tokens)
+    else:
+        eff_max_tokens = None # Use model default
+        
     # Create a model descriptor from the factory so we can reuse mapped params
     # while still using the `openai` SDK client for calls.
     # Pass the configured token cap into model_params so mapping occurs there.
-    model_params = {"max_completion_tokens": CFG_MAX_TOKENS}
+    model_params = {}
+    if eff_max_tokens is not None:
+        model_params["max_completion_tokens"] = eff_max_tokens
+    
     try:
         model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
         model_name = getattr(model_descriptor, "model_id", None) or os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
@@ -90,15 +123,23 @@ def create_backlog_generation_agent(run_id: str):
 
     openai_client = OpenAI(api_key=api_key) if (api_key and OpenAI is not None) else None
     
-    # Load prompts from external configuration
-    prompt_loader = get_prompt_loader()
-    system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
-    # Merge prompt parameters with any params provided by the factory (factory wins)
-    prompt_params = prompt_loader.get_parameters("backlog_generation_agent")
     # Only set params if not already set by factory descriptor
     for k, v in (prompt_params or {}).items():
         if k not in params:
             params[k] = v
+    
+    # Ensure max_completion_tokens is set in params if we calculated it
+    if eff_max_tokens is not None:
+        params["max_completion_tokens"] = eff_max_tokens
+    elif "max_completion_tokens" in params:
+        # If factory set it (e.g. from model_params), keep it.
+        pass
+    else:
+        # If neither set it, ensure we don't send a default if we want model default.
+        # But wait, if we want model default, we shouldn't send max_tokens at all.
+        # The params dict is used for extra params.
+        pass
+
     logger.debug("Final params after merging prompt defaults: %s", params)
     
     def _safe_json_extract(text: str) -> Dict[str, Any]:
@@ -235,10 +276,7 @@ def create_backlog_generation_agent(run_id: str):
             # Call LLM with resilience to model/format issues
             # Respect prompt parameter defaults, cap by config if provided.
             # Map across possible config keys to the modern "max_completion_tokens".
-            eff_max_tokens = (
-                min(params.get("max_completion_tokens", params.get("max_tokens", 2000)), CFG_MAX_TOKENS)
-                if CFG_MAX_TOKENS else params.get("max_completion_tokens", params.get("max_tokens", 2000))
-            )
+            # eff_max_tokens is already calculated above.
 
             def _try_llm_call(use_response_format: bool, mdl: str):
                 logger.debug("LLM call: model=%s use_response_format=%s", mdl, use_response_format)

@@ -85,3 +85,7 @@ user_prompt_template: |
 parameters:
   max_completion_tokens: 2000
   response_format: json_object
+  max_ado_in_prompt: 6
+  max_arch_in_prompt: 6
+  ado_desc_len: 400
+  arch_text_len: 600

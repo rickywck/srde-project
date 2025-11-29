@@ -22,6 +22,25 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Configure logging early so imports/agents respect LOG_LEVEL
+import logging
+import sys
+
+_log_level = os.getenv("LOG_LEVEL", os.getenv("LOGLEVEL", "INFO")).upper()
+_level = getattr(logging, _log_level, logging.INFO)
+# Use stderr and force replacement of handlers to avoid reentrant writes to stdout
+logging.basicConfig(
+    level=_level,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
+    force=True,
+)
+# Ensure important framework loggers follow the same level
+logging.getLogger("uvicorn").setLevel(_level)
+logging.getLogger("uvicorn.error").setLevel(_level)
+logging.getLogger("uvicorn.access").setLevel(_level)
+logging.getLogger("backlog_generation_agent").setLevel(_level)
+
 from agents.supervisor_agent import SupervisorAgent
 from workflows import BacklogSynthesisWorkflow, StrandsBacklogWorkflow
 from tools.ado_writer_tool import create_ado_writer_tool
@@ -447,4 +466,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # forward env LOG_LEVEL to uvicorn (expects lowercase level string)
+    uv_log_level = os.getenv("LOG_LEVEL", "info").lower()
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level=uv_log_level)
