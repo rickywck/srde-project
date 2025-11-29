@@ -11,8 +11,9 @@ from typing import Dict, Any, List
 
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
-from openai import OpenAI
 from .prompt_loader import get_prompt_loader
+from .model_factory import ModelFactory
+import logging
 
 EVALUATION_SCHEMA = {
     "completeness": {"score": "int (1-5)", "reasoning": "string"},
@@ -46,23 +47,53 @@ def create_evaluation_agent(run_id: str):
         "evaluation_mode": "live" | "batch"
     }
     """
-    api_key = os.getenv("OPENAI_API_KEY")
-    openai_client = OpenAI(api_key=api_key) if api_key else None
-    # Load default model from config, allow env override
-    config_path = "config.poc.yaml"
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            _cfg = yaml.safe_load(f) or {}
-    else:
-        _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
-    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
+    # Module logger
+    logger = logging.getLogger(__name__)
 
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
     evaluation_system_prompt = prompt_loader.get_system_prompt("evaluation_agent")
-    params = prompt_loader.get_parameters("evaluation_agent")
+    params = prompt_loader.get_parameters("evaluation_agent") or {}
     eval_config = prompt_loader.load_prompt("evaluation_agent")
     evaluation_schema = eval_config.get("evaluation_schema", EVALUATION_SCHEMA)
+
+    # Load app config via ModelFactory
+    config_path = "config.poc.yaml"
+    try:
+        _cfg = ModelFactory._load_config(config_path)
+        logger.debug("Loaded config for evaluation agent: %s", {k: v for k, v in (_cfg or {}).items()})
+    except Exception as e:
+        logger.exception("Error loading config via ModelFactory: %s", e)
+        _cfg = {}
+
+    # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
+    agent_max_tokens = params.get("max_completion_tokens") or params.get("max_output_tokens") or params.get("max_tokens")
+    app_max_tokens = _cfg.get("openai", {}).get("max_tokens")
+    if agent_max_tokens is not None:
+        eff_max_tokens = int(agent_max_tokens)
+    elif app_max_tokens is not None:
+        eff_max_tokens = int(app_max_tokens)
+    else:
+        eff_max_tokens = None
+
+    # Build model via ModelFactory to centralize defaults and param mapping
+    model = None
+    model_id = None
+    model_params = {}
+    if eff_max_tokens is not None:
+        model_params["max_completion_tokens"] = eff_max_tokens
+    try:
+        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
+        model = model_descriptor
+        model_id = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
+        logger.debug("Evaluation agent model descriptor: model_id=%s params=%s", model_id, getattr(model_descriptor, "params", {}))
+    except Exception as e:
+        logger.exception("ModelFactory.create_openai_model failed for evaluation agent: %s", e)
+        model_id = ModelFactory.get_default_model_id(config_path)
+        try:
+            model = OpenAIModel(model_id=model_id, params={"max_completion_tokens": eff_max_tokens} if eff_max_tokens else None)
+        except Exception:
+            model = None
 
     @tool
     def evaluate_backlog_quality(input_json: str) -> str:
@@ -95,8 +126,8 @@ def create_evaluation_agent(run_id: str):
                     f.write(json.dumps(mock) + "\n")
             return json.dumps(mock, indent=2)
 
-        if not openai_client:
-            return json.dumps({"status": "error", "error": "OPENAI_API_KEY not set and mock mode not enabled"}, indent=2)
+        if not model:
+            return json.dumps({"status": "error", "error": "No model available (OPENAI_API_KEY not set or ModelFactory failed)"}, indent=2)
 
         # Build evaluation prompt using template
         ado_items_fmt = []
@@ -122,24 +153,10 @@ def create_evaluation_agent(run_id: str):
         )
 
         try:
-            # Normalize token parameter and omit temperature (some models only allow default=1)
-            max_comp = (
-                params.get("max_completion_tokens")
-                or params.get("max_output_tokens")
-                or params.get("max_tokens")
-                or 1000
-            )
-            response = openai_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": evaluation_system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_completion_tokens=max_comp,
-                response_format={"type": params.get("response_format", "json_object")}
-            )
-            content = response.choices[0].message.content
-            eval_obj = json.loads(content)
+            agent = Agent(model=model, system_prompt=evaluation_system_prompt, tools=[], callback_handler=None)
+            llm_response = agent(user_prompt)
+            llm_text = str(llm_response)
+            eval_obj = json.loads(llm_text)
             # Basic validation
             for key in ["completeness", "relevance", "quality"]:
                 if key not in eval_obj or "score" not in eval_obj[key]:
@@ -154,7 +171,8 @@ def create_evaluation_agent(run_id: str):
                 "items_evaluated": len(generated_backlog),
                 "evaluation": eval_obj,
                 "mode": evaluation_mode,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "model_used": model_id,
             }
             # Persist if live mode
             if evaluation_mode == "live":
@@ -165,6 +183,7 @@ def create_evaluation_agent(run_id: str):
                     f.write(json.dumps(result) + "\n")
             return json.dumps(result, indent=2)
         except Exception as e:
+            logger.exception("Evaluation agent failed: %s", e)
             return json.dumps({"status": "error", "error": f"Evaluation failed: {e}", "run_id": run_id}, indent=2)
 
     return evaluate_backlog_quality

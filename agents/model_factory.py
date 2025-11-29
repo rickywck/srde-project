@@ -96,9 +96,10 @@ class ModelFactory:
             if max_tokens is not None:
                 try:
                     val = int(max_tokens)
+                    # Use the newer Responses API parameter `max_completion_tokens`.
+                    # Do NOT set both `max_completion_tokens` and `max_tokens` together
+                    # to avoid invalid parameter combination errors from the API.
                     final_params["max_completion_tokens"] = val
-                    # Also set max_tokens for compatibility with frameworks/models that check it
-                    final_params["max_tokens"] = val
                 except (ValueError, TypeError) as e:
                     logger.exception("Invalid max_tokens value: %s", max_tokens)
 
@@ -138,7 +139,6 @@ class ModelFactory:
 
             if eff_cap is not None:
                 final_params["max_completion_tokens"] = int(eff_cap)
-                final_params["max_tokens"] = int(eff_cap)
                 logger.debug("Injected effective token cap into final_params: %s", eff_cap)
 
         try:
