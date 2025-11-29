@@ -49,6 +49,11 @@ from strands.models.openai import OpenAIModel
 from .prompt_loader import get_prompt_loader
 import yaml
 from services.similar_story_retriever import SimilarStoryRetriever
+from .model_factory import ModelFactory
+import logging
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 # Constants
 GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
@@ -105,35 +110,50 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
     system_prompt = prompt_loader.get_system_prompt("tagging_agent")
-    params = prompt_loader.get_parameters("tagging_agent")
-    
-    # Prepare lightweight model instance (reads OPENAI_API_KEY env)
-    # Load default model from config, allow env override
+    params = prompt_loader.get_parameters("tagging_agent") or {}
+
+    # Load app config via ModelFactory
     config_path = "config.poc.yaml"
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            _cfg = yaml.safe_load(f) or {}
-    else:
-        _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
+    try:
+        _cfg = ModelFactory._load_config(config_path)
+        logger.debug("Loaded config for tagging agent: %s", {k: v for k, v in (_cfg or {}).items()})
+    except Exception as e:
+        logger.exception("Error loading config via ModelFactory: %s", e)
+        _cfg = {}
 
     if default_similarity_threshold is None:
         default_similarity_threshold = float(_cfg.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5))
 
-    model_id = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
-    # Map token parameter for newer OpenAI Responses API which expects 'max_completion_tokens'
-    max_comp_tokens = (
-        params.get("max_completion_tokens")
-        or params.get("max_output_tokens")
-        or params.get("max_tokens")
-        or 500
-    )
-    # Some models do not support temperature; omit it to avoid 400 errors.
-    model = OpenAIModel(
-        model_id=model_id,
-        params={
-            "max_completion_tokens": max_comp_tokens,
-        },
-    )
+    # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
+    agent_max_tokens = params.get("max_completion_tokens") or params.get("max_tokens")
+    app_max_tokens = _cfg.get("openai", {}).get("max_tokens")
+    if agent_max_tokens is not None:
+        eff_max_tokens = int(agent_max_tokens)
+    elif app_max_tokens is not None:
+        eff_max_tokens = int(app_max_tokens)
+    else:
+        eff_max_tokens = None
+
+    # Build model via ModelFactory to centralize defaults and param mapping
+    model = None
+    model_id = None
+    model_params = {}
+    if eff_max_tokens is not None:
+        model_params["max_completion_tokens"] = eff_max_tokens
+    try:
+        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
+        model = model_descriptor
+        model_id = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
+        logger.debug("Tagging agent model descriptor: model_id=%s params=%s", model_id, getattr(model_descriptor, "params", {}))
+    except Exception as e:
+        logger.exception("ModelFactory.create_openai_model failed for tagging agent: %s", e)
+        # Fallback: use simple OpenAIModel with default model id
+        model_id = ModelFactory.get_default_model_id(config_path)
+        try:
+            model = OpenAIModel(model_id=model_id, params={"max_completion_tokens": max_comp_tokens})
+        except Exception:
+            # Last resort: set model to None; Agent() may still accept None depending on strands implementation
+            model = None
 
     @tool
     def tag_story(story_data: Any = None, story: Dict[str, Any] = None, similar_existing_stories: List[Dict[str, Any]] = None, similarity_threshold: float = None) -> str:
@@ -757,17 +777,17 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             raw_story_json = json.dumps(story, ensure_ascii=False)
         except Exception:
             raw_story_json = str(story)
-        print(f"Tagging Agent: Received story payload: {raw_story_json[:1000]}")
+        logger.debug("Tagging Agent: Received story payload: %s", raw_story_json[:1000])
 
         # Log story title and description for troubleshooting
-        print(f"Tagging Agent: Processing story title='{title}' | description='{story.get('description', '')[:120]}…'")
+        logger.info("Tagging Agent: Processing story title='%s' | description='%s…'", title, (story.get('description', '') or '')[:120])
 
         # If caller didn't provide similar stories or provided too few, perform internal retrieval,
         # then merge with any provided list to ensure we always tag against the full set.
         need_retrieval = (not similar) or (isinstance(similar, list) and len(similar) < 2)
         if need_retrieval:
             try:
-                print("Tagging Agent: No similar stories provided; performing internal retrieval…")
+                logger.info("Tagging Agent: No similar stories provided; performing internal retrieval…")
                 retriever = SimilarStoryRetriever(config=_cfg, min_similarity=threshold)
                 retrieved = retriever.find_similar_stories(
                     {
@@ -779,9 +799,9 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 )
                 # Merge provided and retrieved for completeness
                 similar = _merge_similar_sets(similar, retrieved)
-                print(f"Tagging Agent: Internal retrieval found {len(similar)} similar stories (after merge)")
+                logger.info("Tagging Agent: Internal retrieval found %s similar stories (after merge)", len(similar))
             except Exception as e:
-                print(f"Tagging Agent: Internal retrieval failed: {e}")
+                logger.exception("Tagging Agent: Internal retrieval failed: %s", e)
 
         # Early exit if no similar above threshold
         # Ensure we evaluate against all available similar stories above threshold
