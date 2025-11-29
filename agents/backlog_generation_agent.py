@@ -5,12 +5,18 @@ Backlog Generation Agent - Specialized agent for generating backlog items from s
 import os
 import json
 import yaml
+import logging
 from typing import Dict, Any, List, Union
 from pathlib import Path
-from openai import OpenAI
+# Import OpenAI lazily inside the factory function to allow tests to run
+# in environments where the `openai` package isn't installed.
 from strands import tool
 from .prompt_loader import get_prompt_loader
 from tools.token_utils import estimate_tokens
+from .model_factory import ModelFactory
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 def create_backlog_generation_agent(run_id: str):
@@ -24,16 +30,19 @@ def create_backlog_generation_agent(run_id: str):
         A tool function that can be called by the supervisor agent
     """
     
-    # Get OpenAI configuration
+    # Get OpenAI configuration via ModelFactory (centralized)
     api_key = os.getenv("OPENAI_API_KEY")
-    # Load defaults from config, allow env override
     config_path = "config.poc.yaml"
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            _cfg = yaml.safe_load(f) or {}
-    else:
+    # Use ModelFactory to load configuration and determine model id / params
+    try:
+        _cfg = ModelFactory._load_config(config_path)
+        logger.debug("Loaded config for backlog agent: %s", {k: v for k, v in (_cfg or {}).items()})
+    except Exception as e:
+        logger.exception("Error loading config via ModelFactory, using defaults: %s", e)
         _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
-    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
+    # Generation model (factory maps overrides and env vars)
+    # We'll create a lightweight model descriptor from the factory so we can
+    # consistently obtain the model id and mapped params below.
 
     # Generation limits from config
     gen_cfg = _cfg.get("generation", {}) if isinstance(_cfg, dict) else {}
@@ -53,12 +62,44 @@ def create_backlog_generation_agent(run_id: str):
         1500,
     )
     
-    openai_client = OpenAI(api_key=api_key) if api_key else None
+    # Create a model descriptor from the factory so we can reuse mapped params
+    # while still using the `openai` SDK client for calls.
+    # Pass the configured token cap into model_params so mapping occurs there.
+    model_params = {"max_completion_tokens": CFG_MAX_TOKENS}
+    try:
+        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
+        model_name = getattr(model_descriptor, "model_id", None) or os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
+        # expose params if available
+        params = getattr(model_descriptor, "params", None) or {}
+        logger.debug("Model descriptor from factory: model_name=%s params=%s", model_name, params)
+    except Exception as e:
+        # Fall back to legacy behavior if factory fails for any reason
+        logger.exception("ModelFactory.create_openai_model failed, falling back to env/config defaults: %s", e)
+        model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
+        params = {}
+        logger.debug("Fallback model_name=%s params=%s", model_name, params)
+
+    # Import OpenAI lazily so tests that don't have the package can still import this module.
+    OpenAI = None
+    try:
+        from openai import OpenAI as _OpenAI
+        OpenAI = _OpenAI
+        logger.debug("`openai` package available; OpenAI client can be created")
+    except ModuleNotFoundError:
+        logger.warning("`openai` package not installed; running in MOCK mode unless an alternative client is provided")
+
+    openai_client = OpenAI(api_key=api_key) if (api_key and OpenAI is not None) else None
     
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
     system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
-    params = prompt_loader.get_parameters("backlog_generation_agent")
+    # Merge prompt parameters with any params provided by the factory (factory wins)
+    prompt_params = prompt_loader.get_parameters("backlog_generation_agent")
+    # Only set params if not already set by factory descriptor
+    for k, v in (prompt_params or {}).items():
+        if k not in params:
+            params[k] = v
+    logger.debug("Final params after merging prompt defaults: %s", params)
     
     def _safe_json_extract(text: str) -> Dict[str, Any]:
         """Attempt to parse JSON, falling back to extracting first {...} block."""
@@ -76,6 +117,7 @@ def create_backlog_generation_agent(run_id: str):
             try:
                 return json.loads(m.group(0))
             except Exception:
+                logger.debug("Failed to parse JSON block from text during safe extract")
                 return {}
         return {}
 
@@ -120,7 +162,7 @@ def create_backlog_generation_agent(run_id: str):
                 dominant_intent = dominant_intent or ""
                 retrieved_context = retrieved_context or {}
             
-            print(f"Backlog Generation Agent: Processing segment {segment_id} (run_id: {run_id})")
+            logger.info("Backlog Generation Agent: Processing segment %s (run_id: %s)", segment_id, run_id)
             
             # Build generation prompt from template
             ado_items = retrieved_context.get("ado_items", []) or []
@@ -150,6 +192,7 @@ def create_backlog_generation_agent(run_id: str):
                         desc = desc[:ADO_DESC_LEN] + "…"
                     ado_formatted += f"**Description:** {desc or 'No description'}\n"
                 except Exception:
+                    logger.debug("Skipping malformed ADO item during formatting: %s", item)
                     # Skip any malformed item
                     continue
             
@@ -164,6 +207,7 @@ def create_backlog_generation_agent(run_id: str):
                         textv = textv[:ARCH_TEXT_LEN] + "…"
                     arch_formatted += f"{textv or 'No text'}\n"
                 except Exception:
+                    logger.debug("Skipping malformed architecture constraint: %s", constraint)
                     continue
             
             prompt = prompt_loader.format_user_prompt(
@@ -179,14 +223,14 @@ def create_backlog_generation_agent(run_id: str):
             sys_tok = estimate_tokens(system_prompt)
             usr_tok = estimate_tokens(prompt)
             approx_total = sys_tok + usr_tok
-            print(f"Backlog Generation Agent: tokens approx — system={sys_tok}, user={usr_tok}, total≈{approx_total}")
+            logger.debug("Backlog Generation Agent: tokens approx — system=%s, user=%s, total≈%s", sys_tok, usr_tok, approx_total)
             
             # Check if we have OpenAI client
             if not openai_client:
-                print("Backlog Generation Agent: Using MOCK mode (missing OPENAI_API_KEY)")
+                logger.warning("Backlog Generation Agent: Using MOCK mode (missing OPENAI_API_KEY)")
                 return _mock_generation(segment_id, segment_text, intent_labels, run_id)
             
-            print("Backlog Generation Agent: Calling LLM to generate backlog items...")
+            logger.info("Backlog Generation Agent: Calling LLM to generate backlog items...")
 
             # Call LLM with resilience to model/format issues
             # Respect prompt parameter defaults, cap by config if provided.
@@ -197,6 +241,7 @@ def create_backlog_generation_agent(run_id: str):
             )
 
             def _try_llm_call(use_response_format: bool, mdl: str):
+                logger.debug("LLM call: model=%s use_response_format=%s", mdl, use_response_format)
                 return openai_client.chat.completions.create(
                     model=mdl,
                     messages=[
@@ -220,26 +265,33 @@ def create_backlog_generation_agent(run_id: str):
                 try:
                     response = _try_llm_call(use_fmt, mdl)
                     if mdl != model_name:
-                        print(f"Backlog Generation Agent: Fallback model in use: {mdl}")
+                        logger.info("Backlog Generation Agent: Fallback model in use: %s", mdl)
                     break
                 except Exception as e:
                     last_err = e
-                    print(f"Backlog Generation Agent: LLM call attempt {attempt} failed: {e}")
+                    logger.warning("Backlog Generation Agent: LLM call attempt %s failed: %s", attempt, e, exc_info=True)
                     continue
 
             if response is None:
+                logger.error("LLM call failed after retries: %s", last_err)
                 raise RuntimeError(f"LLM call failed after retries: {last_err}")
 
             # Parse response
-            result_text = response.choices[0].message.content if hasattr(response.choices[0].message, "content") else str(response)
+            try:
+                result_text = response.choices[0].message.content if hasattr(response.choices[0].message, "content") else str(response)
+            except Exception:
+                result_text = str(response)
+            logger.debug("Raw LLM response text length=%s", len(result_text) if result_text else 0)
             # First try strict JSON, then fall back to best-effort extraction
             try:
                 result = json.loads(result_text)
             except json.JSONDecodeError:
+                logger.debug("Strict JSON decode failed, attempting safe extract")
                 result = _safe_json_extract(result_text)
             
             # Validate structure
             if not isinstance(result, dict) or "backlog_items" not in result:
+                logger.warning("LLM response missing 'backlog_items', falling back to mock/raise: %s", result)
                 # If we still didn't get a valid structure, fall back to mock path
                 raise json.JSONDecodeError("Missing 'backlog_items' key in response", result_text or "", 0)
             
@@ -284,7 +336,7 @@ def create_backlog_generation_agent(run_id: str):
                 for item in backlog_items:
                     f.write(json.dumps(item) + "\n")
             
-            print(f"Backlog Generation Agent: Generated {len(backlog_items)} backlog items")
+            logger.info("Backlog Generation Agent: Generated %s backlog items", len(backlog_items))
             
             # Prepare summary
             summary = {
@@ -305,10 +357,11 @@ def create_backlog_generation_agent(run_id: str):
             
         except json.JSONDecodeError as e:
             # Fallback: use mock generation if LLM JSON is truncated or invalid
-            print(f"Backlog Generation Agent: JSON parse failed, using fallback. Reason: {str(e)}")
+            logger.warning("Backlog Generation Agent: JSON parse failed, using fallback. Reason: %s", str(e))
             return _mock_generation(segment_id, segment_text, intent_labels, run_id)
         
         except Exception as e:
+            logger.exception("Backlog generation failed for segment %s: %s", segment_id, e)
             error_msg = {
                 "status": "error",
                 "error": f"Backlog generation failed: {str(e)}",

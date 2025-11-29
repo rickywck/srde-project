@@ -13,7 +13,7 @@ def _long_text(n: int) -> str:
 
 def test_backlog_generation_with_synthetic_context(monkeypatch, tmp_path):
     # Force mock mode to avoid real LLM calls
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    #monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     run_id = str(uuid.uuid4())
     tool = create_backlog_generation_agent(run_id)

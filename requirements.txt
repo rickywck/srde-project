@@ -1,5 +1,5 @@
 # Core dependencies
-openai>=1.0.0
+#openai>=1.0.0
 pinecone>=5.0.0
 requests>=2.31.0
 pydantic>=2.0.0
@@ -8,6 +8,9 @@ PyYAML>=6.0
 
 # AWS Strands Agentic Framework
 strands-agents>=1.15.0
+strands-agents[openai]
+strands-agents-tools
+strands-agents[otel]
 
 # Web framework
 fastapi[standard]>=0.104.0
