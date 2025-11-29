@@ -514,19 +514,25 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             # sort by similarity desc for nicer prompt ordering
             return sorted(merged.values(), key=lambda x: x.get("similarity", 0.0), reverse=True)
 
-        # Multi-story handling: if the incoming story is a list or payload has a 'stories' list,
-        # process each story individually and aggregate results.
+        # Multi-story handling: if the incoming story is a list or payload has a list of backlog items,
+        # process each story individually and aggregate results. Support multiple common keys used by LLMs.
         if (
             isinstance(story, list)
             or isinstance(payload.get("stories"), list)
             or isinstance(payload.get("user_stories"), list)
             or isinstance(payload.get("items"), list)
+            or isinstance(payload.get("backlog_items"), list)
+            or isinstance(payload.get("work_items"), list)
+            or isinstance(payload.get("backlog"), list)
         ):
             raw_list = (
                 story if isinstance(story, list)
                 else payload.get("stories")
                 or payload.get("user_stories")
                 or payload.get("items")
+                or payload.get("backlog_items")
+                or payload.get("work_items")
+                or payload.get("backlog")
             )
             # Filter: tag only explicit User Story types; if type is missing, keep (assume caller supplied stories list)
             stories_list = []
@@ -658,10 +664,10 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 return True
             return not (s.get("title") or s.get("description"))
 
-        # If story fields are empty but caller supplied run_id/segment_id only,
+        # If story fields are empty but caller supplied run_id/segment_id or a backlog_path,
         # run batch tagging over all user stories in the generated backlog file
-        # for the provided run (ignoring segment_id), mirroring the multi-story behavior.
-        if _is_empty_story(story) and (payload.get("run_id") or payload.get("segment_id")):
+        # for the provided run/path (ignoring segment_id), mirroring the multi-story behavior.
+        if _is_empty_story(story) and (payload.get("run_id") or payload.get("segment_id") or payload.get("backlog_path")):
             try:
                 # Reuse resolved context
                 backlog_file = resolved_backlog_path
