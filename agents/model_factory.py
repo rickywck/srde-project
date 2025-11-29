@@ -33,6 +33,21 @@ class ModelFactory:
             return {"openai": {"chat_model": "gpt-4.1-mini"}}
 
     @staticmethod
+    def get_default_model_id(config_path: str = "config.poc.yaml", model_id_override: Optional[str] = None) -> str:
+        """
+        Resolve the effective default model id using the same priority rules as
+        `create_openai_model` without instantiating any model objects.
+
+        Priority: override > env var > config default
+        """
+        try:
+            cfg = ModelFactory._load_config(config_path)
+        except Exception:
+            cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
+        default_model = cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini")
+        return model_id_override or os.getenv("OPENAI_CHAT_MODEL", default_model)
+
+    @staticmethod
     def create_openai_model(
         config_path: str = "config.poc.yaml",
         model_params: Optional[Dict[str, Any]] = None,

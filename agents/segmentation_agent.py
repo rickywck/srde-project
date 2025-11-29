@@ -5,11 +5,14 @@ Segmentation Agent - Specialized agent for document segmentation with intent det
 import os
 import json
 import yaml
+import logging
 from pathlib import Path
-from openai import OpenAI
 from strands import Agent, tool
-from strands.models.openai import OpenAIModel
 from .prompt_loader import get_prompt_loader
+from .model_factory import ModelFactory
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 def create_segmentation_agent(run_id: str):
@@ -23,27 +26,63 @@ def create_segmentation_agent(run_id: str):
         A tool function that can be called by the supervisor agent
     """
     
-    # Get OpenAI configuration from environment
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY not found in environment")
-    
-    openai_client = OpenAI(api_key=api_key) if api_key else None
-    # Load default model from config, allow env override via OPENAI_CHAT_MODEL
-    config_path = "config.poc.yaml"
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            _cfg = yaml.safe_load(f) or {}
-    else:
-        _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
-    model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
-    
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
     prompt_config = prompt_loader.load_prompt("segmentation_agent")
     system_prompt = prompt_loader.get_system_prompt("segmentation_agent")
     user_template = prompt_loader.get_user_prompt_template("segmentation_agent")
-    params = prompt_loader.get_parameters("segmentation_agent")
+    prompt_params = prompt_loader.get_parameters("segmentation_agent") or {}
+
+    # Load app config via ModelFactory so model selection and params match backlog agent
+    config_path = "config.poc.yaml"
+    try:
+        _cfg = ModelFactory._load_config(config_path)
+        logger.debug("Loaded config for segmentation agent: %s", {k: v for k, v in (_cfg or {}).items()})
+    except Exception as e:
+        logger.exception("Error loading config via ModelFactory: %s", e)
+        _cfg = {}
+
+    # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
+    agent_max_tokens = prompt_params.get("max_completion_tokens") or prompt_params.get("max_tokens")
+    app_max_tokens = _cfg.get("openai", {}).get("max_tokens")
+    if agent_max_tokens is not None:
+        eff_max_tokens = int(agent_max_tokens)
+    elif app_max_tokens is not None:
+        eff_max_tokens = int(app_max_tokens)
+    else:
+        eff_max_tokens = None
+
+    model_params = {}
+    if eff_max_tokens is not None:
+        model_params["max_completion_tokens"] = eff_max_tokens
+
+    try:
+        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
+        model_name = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
+        model_params_from_factory = getattr(model_descriptor, "params", None) or {}
+        logger.debug("Model descriptor from factory: model_name=%s params=%s", model_name, model_params_from_factory)
+    except Exception as e:
+        logger.exception("ModelFactory.create_openai_model failed, falling back to env/config defaults: %s", e)
+        model_name = ModelFactory.get_default_model_id(config_path)
+        model_params_from_factory = {}
+
+    # Import OpenAI lazily so tests without package can still import this module
+    OpenAI = None
+    try:
+        from openai import OpenAI as _OpenAI
+        OpenAI = _OpenAI
+        logger.debug("`openai` package available; OpenAI client can be created")
+    except ModuleNotFoundError:
+        logger.warning("`openai` package not installed; running in MOCK mode unless an alternative client is provided")
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    openai_client = OpenAI(api_key=api_key) if (api_key and OpenAI is not None) else None
+
+    # Merge prompt params with any params from the model factory (factory wins)
+    params = dict(model_params_from_factory)
+    for k, v in (prompt_params or {}).items():
+        if k not in params:
+            params[k] = v
     
     @tool
     def segment_document(document_text: str) -> str:
@@ -64,11 +103,11 @@ def create_segmentation_agent(run_id: str):
         )
         
         try:
-            print(f"Segmentation Agent: Processing document (run_id: {run_id})")
+            logger.info("Segmentation Agent: Processing document (run_id: %s)", run_id)
 
             # Mock mode for offline / no network testing
             if os.getenv("SEGMENTATION_AGENT_MOCK") == "1":
-                print("Segmentation Agent: Using MOCK mode (SEGMENTATION_AGENT_MOCK=1)")
+                logger.info("Segmentation Agent: Using MOCK mode (SEGMENTATION_AGENT_MOCK=1)")
                 # Simple segmentation by double newlines
                 raw_segments = [s.strip() for s in document_text.split("\n\n") if s.strip()]
 
@@ -128,8 +167,9 @@ def create_segmentation_agent(run_id: str):
                 response = openai_client.chat.completions.create(
                     model=model_name,
                     messages=[{"role": "user", "content": segmentation_prompt}],
-                    max_completion_tokens=max_comp,
-                    response_format={"type": params.get("response_format", "json_object")}
+                    temperature=params.get("temperature", 0.7),
+                    max_tokens=eff_max_tokens,
+                    **({"response_format": {"type": params.get("response_format", "json_object")}} if params.get("response_format") else {})
                 )
                 # Parse response
                 result_text = response.choices[0].message.content
@@ -151,7 +191,7 @@ def create_segmentation_agent(run_id: str):
                 for segment in segments:
                     f.write(json.dumps(segment) + "\n")
             
-            print(f"Segmentation Agent: Created {len(segments)} segments")
+            logger.info("Segmentation Agent: Created %s segments", len(segments))
             
             # Prepare summary for display
             summary = {

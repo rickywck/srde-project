@@ -38,8 +38,8 @@ def create_backlog_generation_agent(run_id: str):
         _cfg = ModelFactory._load_config(config_path)
         logger.debug("Loaded config for backlog agent: %s", {k: v for k, v in (_cfg or {}).items()})
     except Exception as e:
-        logger.exception("Error loading config via ModelFactory, using defaults: %s", e)
-        _cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
+        logger.exception("Error loading config via ModelFactory: %s", e)
+        _cfg = {}
     # Generation model (factory maps overrides and env vars)
     # We'll create a lightweight model descriptor from the factory so we can
     # consistently obtain the model id and mapped params below.
@@ -101,14 +101,14 @@ def create_backlog_generation_agent(run_id: str):
     
     try:
         model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-        model_name = getattr(model_descriptor, "model_id", None) or os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
+        model_name = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
         # expose params if available
         params = getattr(model_descriptor, "params", None) or {}
         logger.debug("Model descriptor from factory: model_name=%s params=%s", model_name, params)
     except Exception as e:
-        # Fall back to legacy behavior if factory fails for any reason
+        # Fall back to ModelFactory default behavior if factory fails for any reason
         logger.exception("ModelFactory.create_openai_model failed, falling back to env/config defaults: %s", e)
-        model_name = os.getenv("OPENAI_CHAT_MODEL", _cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini"))
+        model_name = ModelFactory.get_default_model_id(config_path)
         params = {}
         logger.debug("Fallback model_name=%s params=%s", model_name, params)
 
