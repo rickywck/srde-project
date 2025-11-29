@@ -203,6 +203,11 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     out_file_initialized = True
                 with open(tag_file, mode) as f:
                     f.write(json.dumps(result) + "\n")
+                    try:
+                        f.flush()
+                        os.fsync(f.fileno())
+                    except Exception:
+                        pass
 
                 if key is not None:
                     processed_story_keys.add(key)

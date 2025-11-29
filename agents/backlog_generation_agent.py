@@ -187,50 +187,90 @@ def create_backlog_generation_agent(run_id: str):
                 return _mock_generation(segment_id, segment_text, intent_labels, run_id)
             
             print("Backlog Generation Agent: Calling LLM to generate backlog items...")
-            
-            # Call LLM
+
+            # Call LLM with resilience to model/format issues
             # Respect prompt parameter defaults, cap by config if provided.
             # Map across possible config keys to the modern "max_completion_tokens".
-            param_max = (
-                params.get("max_completion_tokens")
-                or params.get("max_output_tokens")
-                or params.get("max_tokens")
-                or 2000
+            eff_max_tokens = (
+                min(params.get("max_completion_tokens", params.get("max_tokens", 2000)), CFG_MAX_TOKENS)
+                if CFG_MAX_TOKENS else params.get("max_completion_tokens", params.get("max_tokens", 2000))
             )
-            eff_max_tokens = min(param_max, CFG_MAX_TOKENS) if CFG_MAX_TOKENS else param_max
-            response = openai_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                max_completion_tokens=eff_max_tokens,
-                response_format={"type": params.get("response_format", "json_object")}
-            )
-            
+
+            def _try_llm_call(use_response_format: bool, mdl: str):
+                return openai_client.chat.completions.create(
+                    model=mdl,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=params.get("temperature", 0.7),
+                    max_tokens=eff_max_tokens,
+                    **({"response_format": {"type": params.get("response_format", "json_object")}} if use_response_format else {})
+                )
+
+            response = None
+            last_err = None
+            # Disable response_format for models that commonly reject it
+            prefer_no_format = any(k in (model_name or "").lower() for k in ["gpt-4.1", "gpt-5"]) 
+            for attempt, (use_fmt, mdl) in enumerate([
+                (not prefer_no_format, model_name),
+                (False, model_name),
+                (False, "gpt-4o-mini"),
+            ], start=1):
+                try:
+                    response = _try_llm_call(use_fmt, mdl)
+                    if mdl != model_name:
+                        print(f"Backlog Generation Agent: Fallback model in use: {mdl}")
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(f"Backlog Generation Agent: LLM call attempt {attempt} failed: {e}")
+                    continue
+
+            if response is None:
+                raise RuntimeError(f"LLM call failed after retries: {last_err}")
+
             # Parse response
-            result_text = response.choices[0].message.content
-            result = json.loads(result_text)
+            result_text = response.choices[0].message.content if hasattr(response.choices[0].message, "content") else str(response)
+            # First try strict JSON, then fall back to best-effort extraction
+            try:
+                result = json.loads(result_text)
+            except json.JSONDecodeError:
+                result = _safe_json_extract(result_text)
             
             # Validate structure
-            if "backlog_items" not in result:
-                raise ValueError("Response missing 'backlog_items' key")
+            if not isinstance(result, dict) or "backlog_items" not in result:
+                # If we still didn't get a valid structure, fall back to mock path
+                raise json.JSONDecodeError("Missing 'backlog_items' key in response", result_text or "", 0)
             
             backlog_items = result["backlog_items"]
             
             # Assign internal IDs
             item_counter = {"epic": 1, "feature": 1, "story": 1}
             for item in backlog_items:
-                # Normalize type for consistency
-                orig_type = item.get("type", "story")
-                if orig_type.lower() == "story":
-                    item["type"] = "User Story"
-                    item_type = "user story"
+                # Normalize type and keep counters consistent
+                orig_type = str(item.get("type", "story")).strip().lower()
+                if orig_type in ("story", "user story", "user_story", "user-story"):
+                    norm_key = "story"
+                elif orig_type in ("feature", "features"):
+                    norm_key = "feature"
+                elif orig_type in ("epic", "epics"):
+                    norm_key = "epic"
                 else:
-                    item_type = orig_type.lower()
-                if item_type in item_counter:
-                    item["internal_id"] = f"{item_type}_{segment_id}_{item_counter[item_type]}"
-                    item_counter[item_type] += 1
+                    norm_key = orig_type
+
+                if norm_key == "story":
+                    display_type = "User Story"
+                elif norm_key == "feature":
+                    display_type = "Feature"
+                elif norm_key == "epic":
+                    display_type = "Epic"
+                else:
+                    display_type = item.get("type", "Story")
+                item["type"] = display_type
+                if norm_key in item_counter:
+                    item["internal_id"] = f"{norm_key}_{segment_id}_{item_counter[norm_key]}"
+                    item_counter[norm_key] += 1
                 item["segment_id"] = segment_id
                 item["run_id"] = run_id
             
@@ -254,9 +294,9 @@ def create_backlog_generation_agent(run_id: str):
                 "items_generated": len(backlog_items),
                 "backlog_file": str(backlog_file),
                 "item_counts": {
-                    "epics": sum(1 for item in backlog_items if item.get("type", "").lower() == "epic"),
-                    "features": sum(1 for item in backlog_items if item.get("type", "").lower() == "feature"),
-                    "stories": sum(1 for item in backlog_items if item.get("type", "").lower() == "story")
+                    "epics": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("epic", "epics")),
+                    "features": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("feature", "features")),
+                    "stories": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("story", "user story"))
                 },
                 "backlog_items": backlog_items
             }

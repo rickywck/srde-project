@@ -37,6 +37,18 @@ class BacklogSynthesisWorkflow:
         self.run_id = run_id
         self.run_dir = run_dir
         self.config = config or self._load_config()
+        # Ensure required API env vars are available for agent factories
+        try:
+            openai_cfg = self.config.get("openai", {}) if isinstance(self.config, dict) else {}
+            api_key_env_var = openai_cfg.get("api_key_env_var", "OPENAI_API_KEY")
+            api_key_val = os.getenv(api_key_env_var)
+            if api_key_val and not os.getenv("OPENAI_API_KEY"):
+                os.environ["OPENAI_API_KEY"] = api_key_val
+            model_name = openai_cfg.get("chat_model") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini"
+            os.environ["OPENAI_CHAT_MODEL"] = model_name
+        except Exception:
+            # Non-fatal if config missing; agents will fall back to mock
+            pass
         
         # Configuration
         self.min_similarity = self.config.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5)
@@ -174,40 +186,50 @@ class BacklogSynthesisWorkflow:
         return segments
     
     async def _stage_retrieval_and_generation(self, segments: List[Dict[str, Any]]):
-        """Stages 2 & 3: Retrieval + Generation per segment"""
+        """Stages 2 & 3: Retrieval + Generation per segment (combined tool)"""
         self.log_progress(f"Stage 2 & 3: Retrieval + Generation for {len(segments)} segments")
-        
-        retrieval_tool = create_retrieval_tool(self.run_id)
-        generation_tool = create_backlog_generation_agent(self.run_id)
-        
+
+        from tools.retrieval_backlog_tool import create_retrieval_backlog_tool
+        combined_tool = create_retrieval_backlog_tool(self.run_id)
+
         for segment in segments:
             seg_id = segment["segment_id"]
-            
-            # Retrieval for this segment
-            retrieval_payload = {
+            payload = {
                 "segment_id": seg_id,
-                "segment_text": segment["raw_text"],
+                "segment_text": segment.get("raw_text", ""),
                 "intent_labels": segment.get("intent_labels", []),
                 "dominant_intent": segment.get("dominant_intent", "")
             }
-            retrieval_result = json.loads(retrieval_tool(json.dumps(retrieval_payload)))
-            self.results["retrieval"].append(retrieval_result)
-            
-            # Generation using retrieved context
-            generation_payload = {
-                "segment_id": seg_id,
-                "segment_text": segment["raw_text"],
-                "intent_labels": segment.get("intent_labels", []),
-                "dominant_intent": segment.get("dominant_intent", ""),
-                "retrieved_context": {
-                    "ado_items": retrieval_result.get("ado_items", []),
-                    "architecture_constraints": retrieval_result.get("architecture_constraints", [])
-                }
-            }
-            generation_result = json.loads(generation_tool(json.dumps(generation_payload)))
+            gen_json = combined_tool(json.dumps(payload))
+            try:
+                generation_result = json.loads(gen_json)
+            except Exception as e:
+                generation_result = {"status": "error", "error": f"Parse generation result failed: {e}", "segment_id": seg_id}
             self.results["generation"].append(generation_result)
-        
-        self.log_progress("✓ Retrieval & generation completed for all segments")
+
+        # Consolidate all generated items and rewrite the backlog file atomically
+        try:
+            all_items: List[Dict[str, Any]] = []
+            for gen in self.results["generation"]:
+                try:
+                    if isinstance(gen, dict) and (gen.get("status") in ("success", "success_mock")):
+                        all_items.extend(gen.get("backlog_items", []) or [])
+                except Exception:
+                    continue
+            out_dir = Path(f"runs/{self.run_id}")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            backlog_path = out_dir / "generated_backlog.jsonl"
+            with open(backlog_path, "w") as f:
+                for it in all_items:
+                    f.write(json.dumps(it) + "\n")
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            self.log_progress(f"✓ Retrieval & generation completed for all segments (combined) — wrote {len(all_items)} items")
+        except Exception as e:
+            self.log_progress(f"⚠ Failed to consolidate backlog items: {e}")
     
     async def _stage_tagging(self):
         """Stage 4: Tag generated stories"""
