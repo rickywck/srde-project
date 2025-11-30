@@ -42,15 +42,15 @@ Output contract (JSON string):
 import json
 import os
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 from pathlib import Path
 from strands import Agent, tool
-from strands.models.openai import OpenAIModel
 from .prompt_loader import get_prompt_loader
-import yaml
 from services.similar_story_retriever import SimilarStoryRetriever
 from .model_factory import ModelFactory
 import logging
+from pydantic import BaseModel, Field, ValidationError
+from strands.types.exceptions import StructuredOutputException
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -62,22 +62,13 @@ USER_STORY_TYPES = {"user story", "story", "user_story"}
 # Note: System prompt now loaded from prompts/tagging_agent.yaml
 
 
-def _safe_json_extract(text: str) -> Dict[str, Any]:
-    """Attempt to extract JSON object from LLM text response."""
-    # Direct parse first
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    # Regex to find first { ... }
-    match = re.search(r"\{[\s\S]*\}", text)
-    if match:
-        snippet = match.group(0)
-        try:
-            return json.loads(snippet)
-        except Exception:
-            return {}
-    return {}
+class TaggingDecisionOut(BaseModel):
+    decision_tag: str = Field(description="new | gap | conflict")
+    related_ids: List[Union[int, str]] = Field(default_factory=list)
+    reason: str = ""
+
+    class Config:
+        extra = "allow"
 
 
 def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], threshold: float) -> Dict[str, Any]:
@@ -112,48 +103,19 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     system_prompt = prompt_loader.get_system_prompt("tagging_agent")
     params = prompt_loader.get_parameters("tagging_agent") or {}
 
-    # Load app config via ModelFactory
-    config_path = "config.poc.yaml"
-    try:
-        _cfg = ModelFactory._load_config(config_path)
-        logger.debug("Loaded config for tagging agent: %s", {k: v for k, v in (_cfg or {}).items()})
-    except Exception as e:
-        logger.exception("Error loading config via ModelFactory: %s", e)
-        _cfg = {}
-
+    # Similarity threshold from params unless caller overrides
     if default_similarity_threshold is None:
-        default_similarity_threshold = float(_cfg.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5))
+        default_similarity_threshold = float(params.get("min_similarity_threshold", 0.5))
 
-    # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
-    agent_max_tokens = params.get("max_completion_tokens") or params.get("max_tokens")
-    app_max_tokens = _cfg.get("openai", {}).get("max_tokens")
-    if agent_max_tokens is not None:
-        eff_max_tokens = int(agent_max_tokens)
-    elif app_max_tokens is not None:
-        eff_max_tokens = int(app_max_tokens)
-    else:
-        eff_max_tokens = None
-
-    # Build model via ModelFactory to centralize defaults and param mapping
-    model = None
-    model_id = None
-    model_params = {}
-    if eff_max_tokens is not None:
-        model_params["max_completion_tokens"] = eff_max_tokens
+    # Build model via ModelFactory helper; no direct config or API key access here
     try:
-        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-        model = model_descriptor
-        model_id = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
-        logger.debug("Tagging agent model descriptor: model_id=%s params=%s", model_id, getattr(model_descriptor, "params", {}))
+        model = ModelFactory.create_openai_model_for_agent(agent_params=params)
+        model_id = getattr(model, "model_id", None) or ModelFactory.get_default_model_id()
+        logger.debug("Tagging agent model initialized: %s", model_id)
     except Exception as e:
-        logger.exception("ModelFactory.create_openai_model failed for tagging agent: %s", e)
-        # Fallback: use simple OpenAIModel with default model id
-        model_id = ModelFactory.get_default_model_id(config_path)
-        try:
-            model = OpenAIModel(model_id=model_id, params={"max_completion_tokens": max_comp_tokens})
-        except Exception:
-            # Last resort: set model to None; Agent() may still accept None depending on strands implementation
-            model = None
+        logger.exception("Failed to create model for tagging agent: %s", e)
+        model = None
+        model_id = ModelFactory.get_default_model_id()
 
     @tool
     def tag_story(story_data: Any = None, story: Dict[str, Any] = None, similar_existing_stories: List[Dict[str, Any]] = None, similarity_threshold: float = None) -> str:
@@ -788,7 +750,8 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         if need_retrieval:
             try:
                 logger.info("Tagging Agent: No similar stories provided; performing internal retrieval…")
-                retriever = SimilarStoryRetriever(config=_cfg, min_similarity=threshold)
+                # Use retriever with default internal configuration (no config file dependency)
+                retriever = SimilarStoryRetriever(config=None, min_similarity=threshold)
                 retrieved = retriever.find_similar_stories(
                     {
                         "title": story.get("title", ""),
@@ -839,13 +802,8 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             similar_stories_formatted=similar_formatted
         )
 
-        agent = Agent(model=model, system_prompt=system_prompt, tools=[], callback_handler=None)
-        llm_response = agent(user_prompt)
-        llm_text = str(llm_response)
-
-        parsed = _safe_json_extract(llm_text)
-        if not parsed or not isinstance(parsed, dict) or "decision_tag" not in parsed:
-            # Fallback to rule-based
+        if model is None:
+            logger.warning("Tagging Agent: No model available; using rule-based fallback")
             fallback = _rule_based_fallback(story, above_threshold, threshold)
             return _finalize({
                 "status": "ok",
@@ -860,27 +818,61 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 "fallback_used": True
             }, internal_id, title)
 
-        # Clean / normalize parsed output
-        decision = parsed.get("decision_tag", "new").lower()
-        if decision not in {"new", "gap", "conflict"}:
-            decision = "new"
-        related_ids = parsed.get("related_ids", [])
-        if not isinstance(related_ids, list):
-            related_ids = []
-        reason = parsed.get("reason", "")[:200]
+        try:
+            agent = Agent(model=model, system_prompt=system_prompt)
+            result = agent(
+                user_prompt,
+                structured_output_model=TaggingDecisionOut,
+            )
+            parsed: TaggingDecisionOut = result.structured_output  # type: ignore[assignment]
+            decision = (parsed.decision_tag or "new").lower()
+            if decision not in {"new", "gap", "conflict"}:
+                decision = "new"
+            related_ids = parsed.related_ids or []
+            reason = (parsed.reason or "")[:200]
 
-        return _finalize({
-            "status": "ok",
-            "run_id": run_id,
-            "decision_tag": decision,
-            "related_ids": related_ids,
-            "reason": reason,
-            "early_exit": False,
-            "similarity_threshold": threshold,
-            "similar_count": len(above_threshold),
-            "model_used": model_id,
-            "fallback_used": False
-        }, internal_id, title)
+            return _finalize({
+                "status": "ok",
+                "run_id": run_id,
+                "decision_tag": decision,
+                "related_ids": related_ids,
+                "reason": reason,
+                "early_exit": False,
+                "similarity_threshold": threshold,
+                "similar_count": len(above_threshold),
+                "model_used": model_id,
+                "fallback_used": False
+            }, internal_id, title)
+        except (StructuredOutputException, ValidationError) as e:
+            logger.warning("Tagging Agent: Structured output failed, using rule-based fallback. Reason: %s", e)
+            fallback = _rule_based_fallback(story, above_threshold, threshold)
+            return _finalize({
+                "status": "ok",
+                "run_id": run_id,
+                "decision_tag": fallback.get("decision_tag", "new"),
+                "related_ids": fallback.get("related_ids", []),
+                "reason": fallback.get("reason", "Fallback applied"),
+                "early_exit": False,
+                "similarity_threshold": threshold,
+                "similar_count": len(above_threshold),
+                "model_used": model_id,
+                "fallback_used": True
+            }, internal_id, title)
+        except Exception as e:
+            logger.exception("Tagging Agent: Agent invocation failed, using rule-based fallback: %s", e)
+            fallback = _rule_based_fallback(story, above_threshold, threshold)
+            return _finalize({
+                "status": "ok",
+                "run_id": run_id,
+                "decision_tag": fallback.get("decision_tag", "new"),
+                "related_ids": fallback.get("related_ids", []),
+                "reason": fallback.get("reason", "Fallback applied"),
+                "early_exit": False,
+                "similarity_threshold": threshold,
+                "similar_count": len(above_threshold),
+                "model_used": model_id,
+                "fallback_used": True
+            }, internal_id, title)
 
     return tag_story
 
