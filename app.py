@@ -42,7 +42,7 @@ logging.getLogger("uvicorn.access").setLevel(_level)
 logging.getLogger("backlog_generation_agent").setLevel(_level)
 
 from agents.supervisor_agent import SupervisorAgent
-from workflows import BacklogSynthesisWorkflow, StrandsBacklogWorkflow
+from workflows import BacklogSynthesisWorkflow
 from tools.ado_writer_tool import create_ado_writer_tool
 from tools.file_extractor import FileExtractor
 
@@ -370,16 +370,15 @@ async def get_tagging(run_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get tagging: {str(e)}")
 
 @app.post("/generate-backlog/{run_id}")
-async def generate_backlog(run_id: str, use_strands_workflow: bool = False):
+async def generate_backlog(run_id: str):
     """
     Run full backlog synthesis workflow: segment → retrieve → generate → tag.
     
     Args:
         run_id: Unique run identifier
-        use_strands_workflow: If True, use Strands built-in workflow tool for orchestration.
-                             If False (default), use custom sequential workflow.
-    
-    The workflow executes 4 stages with explicit dependency management:
+
+    The workflow executes 4 stages with explicit dependency management using
+    BacklogSynthesisWorkflow (custom sequential implementation):
     1. Segmentation (document → segments with intent detection)
     2. Retrieval (segments → RAG context from Pinecone)
     3. Generation (segments + context → backlog items)
@@ -392,20 +391,9 @@ async def generate_backlog(run_id: str, use_strands_workflow: bool = False):
             raise HTTPException(status_code=404, detail=f"No document found for run {run_id}")
 
         document_text = raw_file.read_text()
-        
-        # Choose workflow implementation
-        if use_strands_workflow:
-            # Use Strands built-in workflow tool (automatic dependency resolution, parallel execution)
-            try:
-                workflow = StrandsBacklogWorkflow(run_id, run_dir)
-            except ImportError as e:
-                raise HTTPException(
-                    status_code=501,
-                    detail=f"Strands workflow not available: {str(e)}"
-                )
-        else:
-            # Use custom sequential workflow (explicit stage management)
-            workflow = BacklogSynthesisWorkflow(run_id, run_dir)
+
+        # Use custom sequential workflow (explicit stage management)
+        workflow = BacklogSynthesisWorkflow(run_id, run_dir)
         
         # Execute workflow pipeline
         result = await workflow.execute(document_text)
