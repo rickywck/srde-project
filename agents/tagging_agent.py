@@ -744,15 +744,12 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         # Log story title and description for troubleshooting
         logger.info("Tagging Agent: Processing story title='%s' | description='%s…'", title, (story.get('description', '') or '')[:120])
 
-        # If caller didn't provide similar stories or provided too few, perform internal retrieval,
-        # then merge with any provided list to ensure we always tag against the full set.
-        need_retrieval = (not similar) or (isinstance(similar, list) and len(similar) < 2)
-        if need_retrieval:
+        # If caller didn't provide similar stories, perform internal retrieval (no merging or size checks)
+        if not similar:
             try:
                 logger.info("Tagging Agent: No similar stories provided; performing internal retrieval…")
-                # Use retriever with default internal configuration (no config file dependency)
                 retriever = SimilarStoryRetriever(config=None, min_similarity=threshold)
-                retrieved = retriever.find_similar_stories(
+                similar = retriever.find_similar_stories(
                     {
                         "title": story.get("title", ""),
                         "description": story.get("description", ""),
@@ -760,9 +757,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     },
                     min_similarity=threshold,
                 )
-                # Merge provided and retrieved for completeness
-                similar = _merge_similar_sets(similar, retrieved)
-                logger.info("Tagging Agent: Internal retrieval found %s similar stories (after merge)", len(similar))
+                logger.info("Tagging Agent: Internal retrieval found %s similar stories", len(similar or []))
             except Exception as e:
                 logger.exception("Tagging Agent: Internal retrieval failed: %s", e)
 

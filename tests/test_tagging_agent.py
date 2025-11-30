@@ -14,22 +14,31 @@ from agents import tagging_agent  # noqa: E402  pylint: disable=wrong-import-pos
 
 
 @pytest.fixture(autouse=True)
-def patch_openai_model(monkeypatch):
-    """Replace OpenAIModel with a lightweight stub for tests."""
+def patch_model_factory(monkeypatch):
+    """Stub out ModelFactory to avoid real model/config access in tests."""
 
     class DummyModel:
-        def __init__(self, model_id: str, params: dict):
+        def __init__(self, model_id: str = "test-model", params: dict | None = None):
             self.model_id = model_id
-            self.params = params
+            self.params = params or {}
 
-    monkeypatch.setattr(tagging_agent, "OpenAIModel", DummyModel)
+    monkeypatch.setattr(
+        tagging_agent.ModelFactory,
+        "create_openai_model_for_agent",
+        lambda agent_params=None: DummyModel(),
+    )
+    monkeypatch.setattr(
+        tagging_agent.ModelFactory,
+        "get_default_model_id",
+        lambda: "test-model",
+    )
 
 
 def test_tagging_agent_returns_new_when_no_similar(monkeypatch):
     """Stories with no similar matches should early-exit as 'new'."""
 
     class FailAgent:
-        def __init__(self, *args, **kwargs):  # pragma: no cover - should never run
+        def __init__(self, model, system_prompt):  # pragma: no cover - should never run
             raise AssertionError("Agent should not be instantiated on early exit")
 
     monkeypatch.setattr(tagging_agent, "Agent", FailAgent)
@@ -61,11 +70,12 @@ def test_tagging_agent_rule_based_fallback(monkeypatch):
     captured_prompt = {}
 
     class InvalidJSONAgent:
-        def __init__(self, model, system_prompt, tools, callback_handler):
+        def __init__(self, model, system_prompt):
             captured_prompt["system_prompt"] = system_prompt
 
-        def __call__(self, prompt):
+        def __call__(self, prompt, structured_output_model=None):
             captured_prompt["prompt"] = prompt
+            # Return a type that will cause the agent wrapper to fail structured parsing
             return "This is not JSON"
 
     monkeypatch.setattr(tagging_agent, "Agent", InvalidJSONAgent)
@@ -96,23 +106,27 @@ def test_tagging_agent_rule_based_fallback(monkeypatch):
     assert result["similar_count"] == 1
     assert result["related_ids"] == ["ADO-42"]
     assert "Implement MFA login" in captured_prompt["prompt"]
-    assert "new|gap|conflict" in captured_prompt["prompt"]
 
 
 def test_tagging_agent_llm_success(monkeypatch):
     """Agent should use LLM JSON when valid and avoid fallback."""
 
     class GoodJSONAgent:
-        def __init__(self, *args, **kwargs):  # pragma: no cover
+        def __init__(self, model, system_prompt):  # pragma: no cover
             pass
 
-        def __call__(self, prompt):  # pragma: no cover
-            # Return valid JSON indicating gap classification
-            return json.dumps({
-                "decision_tag": "gap",
-                "related_ids": ["WK-11", "WK-12"],
-                "reason": "Extends existing stories with missing criteria"
-            })
+        class _Result:
+            def __init__(self, structured_output):
+                self.structured_output = structured_output
+
+        def __call__(self, prompt, structured_output_model=None):  # pragma: no cover
+            # Return an object with structured_output matching the Pydantic model
+            so = tagging_agent.TaggingDecisionOut(
+                decision_tag="gap",
+                related_ids=["WK-11", "WK-12"],
+                reason="Extends existing stories with missing criteria",
+            )
+            return GoodJSONAgent._Result(so)
 
     monkeypatch.setattr(tagging_agent, "Agent", GoodJSONAgent)
 
