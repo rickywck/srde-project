@@ -1,7 +1,7 @@
 """
 Backlog Synthesis Workflow - Externalized orchestration logic
 Implements the full pipeline: segment → retrieve → generate → tag → evaluate
-Uses Strands Workflow for structured multi-agent coordination
+(Orchestrator-only: provider clients are handled inside agents/tools.)
 """
 
 import os
@@ -10,15 +10,13 @@ import yaml
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from datetime import datetime
-from openai import OpenAI
-from pinecone import Pinecone
+# No direct OpenAI/Pinecone usage in the orchestrator
 
 from agents.segmentation_agent import create_segmentation_agent
 from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
 from agents.evaluation_agent import create_evaluation_agent
-from tools.retrieval_tool import create_retrieval_tool
-from services.similar_story_retriever import SimilarStoryRetriever
+# Retrieval is performed by tools/agents; no SimilarStoryRetriever at orchestrator level
 
 
 class BacklogSynthesisWorkflow:
@@ -37,33 +35,8 @@ class BacklogSynthesisWorkflow:
         self.run_id = run_id
         self.run_dir = run_dir
         self.config = config or self._load_config()
-        # Ensure required API env vars are available for agent factories
-        try:
-            openai_cfg = self.config.get("openai", {}) if isinstance(self.config, dict) else {}
-            api_key_env_var = openai_cfg.get("api_key_env_var", "OPENAI_API_KEY")
-            api_key_val = os.getenv(api_key_env_var)
-            if api_key_val and not os.getenv("OPENAI_API_KEY"):
-                os.environ["OPENAI_API_KEY"] = api_key_val
-            model_name = openai_cfg.get("chat_model") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini"
-            os.environ["OPENAI_CHAT_MODEL"] = model_name
-        except Exception:
-            # Non-fatal if config missing; agents will fall back to mock
-            pass
-        
-        # Configuration
+        # Orchestrator configuration (provider-agnostic)
         self.min_similarity = self.config.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5)
-        self.embedding_model = self.config.get("openai", {}).get("embedding_model", "text-embedding-3-small")
-        # Ensure embedding dims align with Pinecone index dimension (default 512)
-        self.embedding_dimensions = int(self.config.get("openai", {}).get("embedding_dimensions", 512))
-        self.index_name = self.config.get("pinecone", {}).get("index_name", "rde-lab")
-        # Optional Pinecone namespace (project scoped)
-        self.pinecone_namespace = (self.config.get("pinecone", {}).get("project") or "").strip()
-        
-        # Initialize clients (lazy)
-        self._openai_client = None
-        self._pinecone_client = None
-        self._index = None
-        self._similar_retriever: Optional[SimilarStoryRetriever] = None
         
         # Workflow state
         self.results = {
@@ -82,37 +55,7 @@ class BacklogSynthesisWorkflow:
                 return yaml.safe_load(f) or {}
         return {}
     
-    @property
-    def openai_client(self) -> Optional[OpenAI]:
-        """Lazy initialization of OpenAI client"""
-        if self._openai_client is None and os.getenv("OPENAI_API_KEY"):
-            self._openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        return self._openai_client
-    
-    @property
-    def pinecone_client(self) -> Optional[Pinecone]:
-        """Lazy initialization of Pinecone client"""
-        if self._pinecone_client is None and os.getenv("PINECONE_API_KEY"):
-            self._pinecone_client = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-        return self._pinecone_client
-    
-    @property
-    def index(self):
-        """Lazy initialization of Pinecone index"""
-        if self._index is None and self.pinecone_client:
-            self._index = self.pinecone_client.Index(self.index_name)
-        return self._index
-
-    @property
-    def similar_retriever(self) -> SimilarStoryRetriever:
-        """Lazy initialization of shared similar story retriever"""
-        if self._similar_retriever is None:
-            self._similar_retriever = SimilarStoryRetriever(
-                config=self.config,
-                min_similarity=self.min_similarity,
-                log_fn=lambda msg: self.log_progress(msg, save_to_history=False),
-            )
-        return self._similar_retriever
+    # No provider client properties; agents/tools handle their own clients internally.
     
     def log_progress(self, message: str, save_to_history: bool = True):
         """Log workflow progress"""
@@ -292,12 +235,8 @@ class BacklogSynthesisWorkflow:
         self.log_progress(f"✓ Tagged {processed} stories (errors: {errors}): {tag_counts}")
     
     def _find_similar_stories(self, story: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Find similar existing stories using the shared retriever class"""
-        try:
-            return self.similar_retriever.find_similar_stories(story, min_similarity=self.min_similarity)
-        except Exception as e:
-            self.log_progress(f"⚠ Similar story search failed: {str(e)}", save_to_history=False)
-            return []
+        """No-op: similarity retrieval is performed by agents/tools."""
+        return []
     
     async def evaluate(self) -> Dict[str, Any]:
         """Stage 5: Evaluate generated backlog quality"""

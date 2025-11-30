@@ -10,7 +10,6 @@ segment → retrieve → generate → tag → evaluate
 """
 
 from .backlog_synthesis_workflow import BacklogSynthesisWorkflow
-from .strands_workflow import StrandsBacklogWorkflow, list_all_workflows
 
 __all__ = [
     "BacklogSynthesisWorkflow",
