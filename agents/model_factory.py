@@ -158,3 +158,50 @@ class ModelFactory:
             # Log and raise a descriptive error so callers can decide how to proceed
             logger.exception("Failed to instantiate OpenAIModel for model_id=%s: %s", model_id, e)
             raise RuntimeError(f"Failed to create OpenAIModel for '{model_id}': {e}") from e
+
+    @staticmethod
+    def create_openai_model_for_agent(
+        agent_params: Optional[Dict[str, Any]] = None,
+        config_path: str = "config.poc.yaml",
+        model_id_override: Optional[str] = None,
+    ) -> OpenAIModel:
+        """
+        Helper to construct an OpenAIModel specifically for a Strands Agent.
+
+        - Reads application configuration (including model defaults and caps)
+        - Filters agent-level parameters to only valid model parameters
+        - Performs effective token calculation (delegates to create_openai_model)
+
+        Args:
+            agent_params: Parameters defined at the agent level (e.g., from prompts YAML).
+            config_path: Path to application configuration file.
+            model_id_override: Optional override for model id.
+
+        Returns:
+            Configured OpenAIModel instance.
+        """
+        # Whitelist of valid model parameters to forward
+        allowed_keys = {
+            "max_tokens",
+            "max_completion_tokens",
+            "temperature",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "seed",
+            "stop",
+            "n",
+        }
+
+        filtered: Dict[str, Any] = {}
+        if agent_params:
+            for k, v in agent_params.items():
+                if k in allowed_keys:
+                    filtered[k] = v
+
+        # Delegate to the existing factory method which also applies effective token caps
+        return ModelFactory.create_openai_model(
+            config_path=config_path,
+            model_params=filtered,
+            model_id_override=model_id_override,
+        )

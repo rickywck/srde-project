@@ -4,9 +4,7 @@ Backlog Generation Agent - Specialized agent for generating backlog items from s
 
 import os
 import json
-import yaml
 import logging
-import re
 from typing import Dict, Any, List, Union
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
@@ -66,23 +64,7 @@ def create_backlog_generation_agent(run_id: str):
         A tool function that can be called by the supervisor agent
     """
     
-    # Get OpenAI configuration via ModelFactory (centralized)
-    api_key = os.getenv("OPENAI_API_KEY")
-    config_path = "config.poc.yaml"
-    # Use ModelFactory to load configuration and determine model id / params
-    try:
-        _cfg = ModelFactory._load_config(config_path)
-        logger.debug("Loaded config for backlog agent: %s", {k: v for k, v in (_cfg or {}).items()})
-    except Exception as e:
-        logger.exception("Error loading config via ModelFactory: %s", e)
-        _cfg = {}
-    # Generation model (factory maps overrides and env vars)
-    # We'll create a lightweight model descriptor from the factory so we can
-    # consistently obtain the model id and mapped params below.
-
-    # Generation limits from prompt parameters (loaded later, but defaults needed here if we want to use them before prompt loader?)
-    # Actually, we should load prompt parameters earlier or move this logic down.
-    # Let's move the prompt loading up.
+    # No direct config or api key handling in the agent. Use ModelFactory.
     
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
@@ -102,61 +84,15 @@ def create_backlog_generation_agent(run_id: str):
     ADO_DESC_LEN = _as_int(prompt_params.get("ado_desc_len", 400), 400)
     ARCH_TEXT_LEN = _as_int(prompt_params.get("arch_text_len", 600), 600)
     
-    # Determine effective max tokens
-    # Priority: Agent Config > App Config > Model Default (None)
-    
-    # 1. Agent Config
-    agent_max_tokens = prompt_params.get("max_completion_tokens") or prompt_params.get("max_tokens")
-    
-    # 2. App Config
-    # We need to check if there is an app level max token setting. 
-    # The user mentioned "application level maximum" but we removed 'generation' section.
-    # Assuming there might be a global setting in 'openai' section or similar, but looking at config.poc.yaml, there isn't one explicitly for max tokens in 'openai' section.
-    # However, let's check if _cfg has anything relevant or if we should just rely on agent config.
-    # The user said "if max token is not defined in both configuration, will use the model default".
-    # So we check _cfg for a fallback if agent_max_tokens is None.
-    # Since we removed 'generation' section, maybe it's in 'openai' section?
-    # The current config.poc.yaml 'openai' section doesn't have it.
-    # So effectively, if not in agent config, it's None (Model Default).
-    
-    app_max_tokens = _cfg.get("openai", {}).get("max_tokens") # Hypothetical app level config
-    
-    if agent_max_tokens is not None:
-        eff_max_tokens = int(agent_max_tokens)
-    elif app_max_tokens is not None:
-        eff_max_tokens = int(app_max_tokens)
-    else:
-        eff_max_tokens = None # Use model default
-        
-    # Prepare model params: whitelist only valid OpenAI model parameters
-    allowed_model_param_keys = {
-        "max_tokens",
-        "max_completion_tokens",
-        "temperature",
-        "top_p",
-        "presence_penalty",
-        "frequency_penalty",
-        "seed",
-        "stop",
-        "n",
-    }
-    model_params: Dict[str, Any] = {}
-    if prompt_params:
-        for k, v in prompt_params.items():
-            if k in allowed_model_param_keys:
-                model_params[k] = v
-    if eff_max_tokens is not None:
-        model_params["max_completion_tokens"] = eff_max_tokens
-
-    # Create the Strands OpenAIModel via ModelFactory
+    # Create the Strands OpenAIModel via ModelFactory helper
     try:
-        model = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-        model_name = getattr(model, "model_id", None) or ModelFactory.get_default_model_id(config_path)
+        model = ModelFactory.create_openai_model_for_agent(agent_params=prompt_params)
+        model_name = getattr(model, "model_id", None) or ModelFactory.get_default_model_id()
         logger.debug("Initialized Strands OpenAIModel: %s", model_name)
     except Exception as e:
         logger.exception("Failed to create Strands OpenAIModel: %s", e)
         model = None
-        model_name = ModelFactory.get_default_model_id(config_path)
+        model_name = ModelFactory.get_default_model_id()
 
     # Initialize Strands Agent with system prompt and model
     agent = None
@@ -278,8 +214,8 @@ def create_backlog_generation_agent(run_id: str):
             logger.debug("Backlog Generation Agent: tokens approx — system=%s, user=%s, total≈%s", sys_tok, usr_tok, approx_total)
             
             # Ensure we can call the agent
-            if not api_key or agent is None:
-                logger.warning("Backlog Generation Agent: Using MOCK mode (missing OPENAI_API_KEY or agent init failed)")
+            if agent is None:
+                logger.warning("Backlog Generation Agent: Using MOCK mode (agent init failed)")
                 return _mock_generation(segment_id, segment_text, intent_labels, run_id)
 
             logger.info("Backlog Generation Agent: Calling Strands Agent (%s) with structured output...", model_name)
