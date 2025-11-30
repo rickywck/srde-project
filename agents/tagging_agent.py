@@ -326,120 +326,18 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         except Exception:
             processed_story_keys = set()
 
-        # If no payload content was supplied at all (chat invoked without args),
-        # attempt batch tagging from the current run's generated backlog file.
+        # No general batch mode: require single story per invocation
         if (
             story_data is None
             and story is None
             and similar_existing_stories is None
             and (not payload.get("story") and not payload.get("similar_existing_stories"))
         ):
-            try:
-                backlog_file = resolved_backlog_path
-                if not backlog_file.exists():
-                    return json.dumps({
-                        "status": "error",
-                        "run_id": str(payload.get("run_id") or run_id),
-                        "message": "No generated backlog found for this run. Provide a story payload or generate backlog first.",
-                    })
-                items = []
-                with open(backlog_file, "r") as bf:
-                    for line in bf:
-                        if line.strip():
-                            try:
-                                items.append(json.loads(line))
-                            except Exception:
-                                pass
-                def _normalize_story_fields(item: Dict[str, Any]) -> Dict[str, Any]:
-                    title = (
-                        item.get("title")
-                        or item.get("name")
-                        or item.get("summary")
-                        or item.get("headline")
-                        or ""
-                    )
-                    desc = (
-                        item.get("description")
-                        or item.get("details")
-                        or item.get("body")
-                        or ""
-                    )
-                    ac = (
-                        item.get("acceptance_criteria")
-                        or item.get("acceptanceCriteria")
-                        or item.get("ac")
-                        or []
-                    )
-                    if isinstance(ac, str):
-                        ac = [s.strip() for s in ac.replace("\r", "").split("\n") if s.strip()]
-                    internal_id = item.get("internal_id") or item.get("id") or item.get("uid")
-                    # Fallback title if missing: derive from description or internal id
-                    if not title:
-                        if isinstance(desc, str) and desc.strip():
-                            words = desc.strip().split()
-                            title = " ".join(words[:12]) + ("…" if len(words) > 12 else "")
-                        elif internal_id:
-                            title = f"Story {internal_id}"
-                        else:
-                            title = "Untitled Story"
-                    return {
-                        "title": title,
-                        "description": desc or "",
-                        "acceptance_criteria": ac,
-                        "internal_id": internal_id,
-                    }
-
-                stories = [i for i in items if ((i.get("type") or i.get("work_item_type") or "").lower() in USER_STORY_TYPES)]
-                if not stories:
-                    return json.dumps({
-                        "status": "error",
-                        "run_id": run_id,
-                        "message": "No user stories found in generated backlog for this run.",
-                    })
-
-                # Use provided threshold or default
-                batch_threshold = float(payload.get("similarity_threshold", default_similarity_threshold))
-                tag_counts = {"new": 0, "gap": 0, "conflict": 0}
-                processed = 0
-                errors = 0
-
-                for s in stories:
-                    norm = _normalize_story_fields(s)
-                    single_payload = {
-                        "story": norm,
-                        # Leave similar stories empty to trigger internal retrieval
-                        "similar_existing_stories": [],
-                        "similarity_threshold": batch_threshold,
-                        "__internal_subcall": True,
-                        "run_id": payload.get("run_id"),
-                    }
-                    try:
-                        single_result_str = tag_story(json.dumps(single_payload))
-                        single_obj = json.loads(single_result_str)
-                        decision = (single_obj.get("decision_tag") or "").lower()
-                        if decision in tag_counts:
-                            tag_counts[decision] += 1
-                        processed += 1
-                    except Exception:
-                        errors += 1
-                        continue
-
-                return json.dumps({
-                    "status": "ok",
-                    "run_id": run_id,
-                    "mode": "batch",
-                    "processed": processed,
-                    "errors": errors,
-                    "stories_found": len(stories),
-                    "tag_counts": tag_counts,
-                    "message": f"Tagged {processed} stories from generated_backlog.jsonl",
-                })
-            except Exception as e:
-                return json.dumps({
-                    "status": "error",
-                    "run_id": run_id,
-                    "message": f"Batch tagging failed: {e}",
-                })
+            return json.dumps({
+                "status": "error",
+                "run_id": run_id,
+                "message": "No story provided. Call the tool with a single 'story' payload.",
+            })
 
         story = payload.get("story", {})
         similar = payload.get("similar_existing_stories", [])
@@ -451,41 +349,13 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         elif not isinstance(similar, list):
             similar = []
 
-        # Helper to merge two similar-story lists into a unique set by work_item_id or title/desc
-        def _merge_similar_sets(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            merged: Dict[str, Dict[str, Any]] = {}
-            def _make_key(item: Dict[str, Any]) -> str:
-                wid = item.get("work_item_id")
-                if wid is not None:
-                    return f"id:{wid}"
-                # fallback key using title + snippet of desc
-                t = (item.get("title") or "").strip().lower()
-                d = (item.get("description") or "").strip().lower()[:80]
-                return f"td:{t}|{d}"
-            def _merge(dst: Dict[str, Any], src: Dict[str, Any]):
-                # keep max similarity
-                try:
-                    dst["similarity"] = max(dst.get("similarity", 0.0), src.get("similarity", 0.0))
-                except Exception:
-                    pass
-                # prefer non-empty title/desc from either side
-                if not dst.get("title") and src.get("title"):
-                    dst["title"] = src.get("title")
-                if not dst.get("description") and src.get("description"):
-                    dst["description"] = src.get("description")
-                if not dst.get("work_item_id") and src.get("work_item_id"):
-                    dst["work_item_id"] = src.get("work_item_id")
-
-            for item in (a or []) + (b or []):
-                if not isinstance(item, dict):
-                    continue
-                key = _make_key(item)
-                if key in merged:
-                    _merge(merged[key], item)
-                else:
-                    merged[key] = dict(item)
-            # sort by similarity desc for nicer prompt ordering
-            return sorted(merged.values(), key=lambda x: x.get("similarity", 0.0), reverse=True)
+        # Disallow multi-story inputs to simplify the agent (enforced by workflow)
+        if isinstance(story, list) or isinstance(payload.get("stories"), list):
+            return json.dumps({
+                "status": "error",
+                "run_id": run_id,
+                "message": "Multiple stories not supported. Call the tool once per story.",
+            })
 
         # Multi-story handling: Only when no explicit single story is provided.
         def _has_explicit_single_story(s: Dict[str, Any]) -> bool:
@@ -493,71 +363,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 bool(s.get("title")) or bool(s.get("description")) or bool(s.get("internal_id")) or bool(s.get("segment_id"))
             )
 
-        if (
-            isinstance(story, list)
-            or (
-                not _has_explicit_single_story(story)
-                and (
-                    isinstance(payload.get("stories"), list)
-                    or isinstance(payload.get("user_stories"), list)
-                    or isinstance(payload.get("items"), list)
-                    or isinstance(payload.get("backlog_items"), list)
-                    or isinstance(payload.get("work_items"), list)
-                    or isinstance(payload.get("backlog"), list)
-                )
-            )
-        ):
-            raw_list = (
-                story if isinstance(story, list)
-                else payload.get("stories")
-                or payload.get("user_stories")
-                or payload.get("items")
-                or payload.get("backlog_items")
-                or payload.get("work_items")
-                or payload.get("backlog")
-            )
-            # Filter: tag only explicit User Story types; if type is missing, keep (assume caller supplied stories list)
-            stories_list = []
-            for s in raw_list:
-                if not isinstance(s, dict):
-                    continue
-                t = (s.get("type") or s.get("work_item_type") or "").lower()
-                if t and t not in USER_STORY_TYPES:
-                    continue
-                stories_list.append(s)
-            processed = 0
-            errors = 0
-            results = []
-            for s in stories_list:
-                if not isinstance(s, dict):
-                    errors += 1
-                    continue
-                single_payload = {
-                    "story": s,
-                    # leave similar empty to trigger internal retrieval
-                    "similar_existing_stories": [],
-                    "similarity_threshold": threshold,
-                    # allow outer payload to carry run_id/segment_id for fallback if needed
-                    "run_id": payload.get("run_id"),
-                    "segment_id": payload.get("segment_id"),
-                    "__internal_subcall": True,
-                }
-                try:
-                    res_str = tag_story(json.dumps(single_payload))
-                    res = json.loads(res_str)
-                    results.append(res)
-                    processed += 1
-                except Exception:
-                    errors += 1
-            return json.dumps({
-                "status": "ok",
-                "run_id": run_id,
-                "mode": "multi",
-                "processed": processed,
-                "errors": errors,
-                "results": results,
-                "message": f"Tagged {processed} of {len(stories_list)} stories",
-            })
+        # Continue with single-story flow
 
         # If incoming story is empty (common when Strands only passes run_id/segment_id),
         # fallback to reading the generated backlog for this run and select the user story
@@ -646,80 +452,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 return True
             return not (s.get("title") or s.get("description"))
 
-        # If story fields are empty and caller explicitly requested batch mode,
-        # run batch tagging over all user stories in the generated backlog file.
-        # This avoids accidental batch runs when chat passes run_id/segment_id for context.
-        if _is_empty_story(story) and bool(payload.get("__batch")):
-            try:
-                # Reuse resolved context
-                backlog_file = resolved_backlog_path
-                if not backlog_file.exists():
-                    return json.dumps({
-                        "status": "error",
-                        "run_id": str(payload.get("run_id") or run_id),
-                        "message": "No generated backlog found for this run.",
-                    })
-                items = []
-                with open(backlog_file, "r") as bf:
-                    for line in bf:
-                        if line.strip():
-                            try:
-                                items.append(json.loads(line))
-                            except Exception:
-                                pass
-                stories = [i for i in items if ((i.get("type") or i.get("work_item_type") or "").lower() in USER_STORY_TYPES)]
-                if not stories:
-                    return json.dumps({
-                        "status": "error",
-                        "run_id": str(payload.get("run_id") or run_id),
-                        "message": "No user stories found in generated backlog for this run.",
-                    })
-                batch_threshold = float(payload.get("similarity_threshold", default_similarity_threshold))
-                tag_counts = {"new": 0, "gap": 0, "conflict": 0}
-                processed = 0
-                errors = 0
-                results = []
-                for s in stories:
-                    single_payload = {
-                        "story": {
-                            "title": s.get("title"),
-                            "description": s.get("description"),
-                            "acceptance_criteria": s.get("acceptance_criteria", []),
-                            "internal_id": s.get("internal_id")
-                        },
-                        "similar_existing_stories": [],
-                        "similarity_threshold": batch_threshold,
-                        "__internal_subcall": True,
-                        "run_id": payload.get("run_id"),
-                    }
-                    try:
-                        single_result_str = tag_story(json.dumps(single_payload))
-                        single_obj = json.loads(single_result_str)
-                        results.append(single_obj)
-                        decision = (single_obj.get("decision_tag") or "").lower()
-                        if decision in tag_counts:
-                            tag_counts[decision] += 1
-                        processed += 1
-                    except Exception:
-                        errors += 1
-                        continue
-                return json.dumps({
-                    "status": "ok",
-                    "run_id": str(payload.get("run_id") or run_id),
-                    "mode": "batch",
-                    "processed": processed,
-                    "errors": errors,
-                    "stories_found": len(stories),
-                    "tag_counts": tag_counts,
-                    "results": results,
-                    "message": f"Tagged {processed} stories from generated_backlog.jsonl",
-                })
-            except Exception as e:
-                return json.dumps({
-                    "status": "error",
-                    "run_id": run_id,
-                    "message": f"Batch tagging (run_id only) failed: {e}",
-                })
+        # No batch mode supported
 
         if _is_empty_story(story):
             loaded = _fallback_load_story_from_generated_backlog(payload)
