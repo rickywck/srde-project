@@ -170,8 +170,9 @@ function setupEventListeners() {
 // Initialize model picker with current OpenAI chat models (excluding special-purpose)
 function initModelPicker() {
     if (!modelSelect) return;
-    // Default model aligned with server config (`config.poc.yaml`)
-    const DEFAULT_OPENAI_MODEL = 'gpt-5-mini';
+    // Default model aligned with server config (`config.poc.yaml`).
+    // Will attempt to fetch server-provided default via `/config` endpoint.
+    const FALLBACK_OPENAI_MODEL = 'gpt-5-mini';
     const MODEL_OPTIONS = [
         'gpt-4o',
         'gpt-4o-mini',
@@ -182,15 +183,31 @@ function initModelPicker() {
         'gpt-5-mini',
         'gpt-5-nano'
     ];
-    const saved = localStorage.getItem('openai_model') || DEFAULT_OPENAI_MODEL;
-    modelSelect.innerHTML = '';
-    MODEL_OPTIONS.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m;
-        if (m === saved) opt.selected = true;
-        modelSelect.appendChild(opt);
-    });
+    // Fetch configured default from server, fall back to stored or hardcoded default
+    (async () => {
+        let defaultModel = FALLBACK_OPENAI_MODEL;
+        try {
+            const resp = await fetch('/config');
+            if (resp.ok) {
+                const cfg = await resp.json();
+                if (cfg && cfg.openai_model) {
+                    defaultModel = cfg.openai_model;
+                }
+            }
+        } catch (e) {
+            console.warn('Could not fetch /config, using fallback model', e);
+        }
+
+        const saved = localStorage.getItem('openai_model') || defaultModel;
+        modelSelect.innerHTML = '';
+        MODEL_OPTIONS.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            if (m === saved) opt.selected = true;
+            modelSelect.appendChild(opt);
+        });
+    })();
     modelSelect.addEventListener('change', () => {
         localStorage.setItem('openai_model', modelSelect.value);
         addMessage('system', `🧠 Model set to ${modelSelect.value}`);

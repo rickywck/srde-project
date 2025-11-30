@@ -84,6 +84,15 @@ class UploadResponse(BaseModel):
 RUNS_DIR = Path("runs")
 RUNS_DIR.mkdir(exist_ok=True)
 
+# Load local configuration for runtime defaults (optional)
+CONFIG_PATH = Path("config.poc.yaml")
+APP_CONFIG = {}
+if CONFIG_PATH.exists():
+    try:
+        APP_CONFIG = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        APP_CONFIG = {}
+
 def get_run_dir(run_id: str) -> Path:
     """Get the directory for a specific run"""
     run_dir = RUNS_DIR / run_id
@@ -108,6 +117,20 @@ def save_chat_history(run_id: str, role: str, message: str):
 async def root():
     """Serve the chat interface"""
     return FileResponse("static/index.html")
+
+
+@app.get("/config")
+async def get_config():
+    """
+    Return lightweight configuration values for the frontend.
+    Currently returns the OpenAI chat model configured in `config.poc.yaml`.
+    """
+    try:
+        openai_cfg = APP_CONFIG.get("openai", {}) if APP_CONFIG else {}
+        chat_model = openai_cfg.get("chat_model") if openai_cfg else None
+        return JSONResponse(content={"openai_model": chat_model})
+    except Exception:
+        return JSONResponse(content={"openai_model": None})
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):

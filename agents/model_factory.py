@@ -43,8 +43,8 @@ class ModelFactory:
         try:
             cfg = ModelFactory._load_config(config_path)
         except Exception:
-            cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
-        default_model = cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini")
+            cfg = {"openai": {"chat_model": "gpt-4o-mini"}}
+        default_model = cfg.get("openai", {}).get("chat_model", "gpt-4o-mini")
         return model_id_override or os.getenv("OPENAI_CHAT_MODEL", default_model)
 
     @staticmethod
