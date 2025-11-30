@@ -4,13 +4,13 @@ Implements live and batch evaluation modes.
 """
 import os
 import json
-import yaml
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
+from pydantic import BaseModel, Field, ValidationError
 from strands import Agent, tool
-from strands.models.openai import OpenAIModel
+from strands.types.exceptions import StructuredOutputException
 from .prompt_loader import get_prompt_loader
 from .model_factory import ModelFactory
 import logging
@@ -36,6 +36,22 @@ def _mock_evaluation() -> Dict[str, Any]:
     }
 
 
+class ScoreReason(BaseModel):
+    score: int = Field(ge=1, le=5, description="Score from 1 to 5")
+    reasoning: str
+
+
+class EvaluationOut(BaseModel):
+    completeness: ScoreReason
+    relevance: ScoreReason
+    quality: ScoreReason
+    overall_score: Optional[float] = None
+    summary: str
+
+    class Config:
+        extra = "allow"
+
+
 def create_evaluation_agent(run_id: str):
     """Create an evaluation agent tool for a specific run.
 
@@ -56,44 +72,16 @@ def create_evaluation_agent(run_id: str):
     params = prompt_loader.get_parameters("evaluation_agent") or {}
     eval_config = prompt_loader.load_prompt("evaluation_agent")
     evaluation_schema = eval_config.get("evaluation_schema", EVALUATION_SCHEMA)
-
-    # Load app config via ModelFactory
-    config_path = "config.poc.yaml"
+    
+    # Build model via ModelFactory helper; no direct config or API key access here
     try:
-        _cfg = ModelFactory._load_config(config_path)
-        logger.debug("Loaded config for evaluation agent: %s", {k: v for k, v in (_cfg or {}).items()})
+        model = ModelFactory.create_openai_model_for_agent(agent_params=params)
+        model_id = getattr(model, "model_id", None) or ModelFactory.get_default_model_id()
+        logger.debug("Evaluation agent model initialized: %s", model_id)
     except Exception as e:
-        logger.exception("Error loading config via ModelFactory: %s", e)
-        _cfg = {}
-
-    # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
-    agent_max_tokens = params.get("max_completion_tokens") or params.get("max_output_tokens") or params.get("max_tokens")
-    app_max_tokens = _cfg.get("openai", {}).get("max_tokens")
-    if agent_max_tokens is not None:
-        eff_max_tokens = int(agent_max_tokens)
-    elif app_max_tokens is not None:
-        eff_max_tokens = int(app_max_tokens)
-    else:
-        eff_max_tokens = None
-
-    # Build model via ModelFactory to centralize defaults and param mapping
-    model = None
-    model_id = None
-    model_params = {}
-    if eff_max_tokens is not None:
-        model_params["max_completion_tokens"] = eff_max_tokens
-    try:
-        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-        model = model_descriptor
-        model_id = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
-        logger.debug("Evaluation agent model descriptor: model_id=%s params=%s", model_id, getattr(model_descriptor, "params", {}))
-    except Exception as e:
-        logger.exception("ModelFactory.create_openai_model failed for evaluation agent: %s", e)
-        model_id = ModelFactory.get_default_model_id(config_path)
-        try:
-            model = OpenAIModel(model_id=model_id, params={"max_completion_tokens": eff_max_tokens} if eff_max_tokens else None)
-        except Exception:
-            model = None
+        logger.exception("Failed to create model for evaluation agent: %s", e)
+        model = None
+        model_id = ModelFactory.get_default_model_id()
 
     @tool
     def evaluate_backlog_quality(input_json: str) -> str:
@@ -109,6 +97,7 @@ def create_evaluation_agent(run_id: str):
 
         # Mock mode
         if os.getenv("EVALUATION_AGENT_MOCK") == "1":
+            logger.debug("Evaluation agent model in mock mode.")
             mock = _mock_evaluation()
             mock.update({
                 "run_id": run_id,
@@ -127,21 +116,63 @@ def create_evaluation_agent(run_id: str):
             return json.dumps(mock, indent=2)
 
         if not model:
-            return json.dumps({"status": "error", "error": "No model available (OPENAI_API_KEY not set or ModelFactory failed)"}, indent=2)
+            return json.dumps({"status": "error", "error": "No model available for evaluation."}, indent=2)
 
-        # Build evaluation prompt using template
-        ado_items_fmt = []
-        for item in retrieved_context.get("ado_items", [])[:5]:
-            ado_items_fmt.append(f"- [{item.get('work_item_id','?')}] {item.get('title','')} :: {item.get('description','')[:120]}")
-        arch_fmt = []
-        for c in retrieved_context.get("architecture_constraints", [])[:5]:
-            arch_fmt.append(f"- {c.get('file_name','constraint')} :: {c.get('text','')[:120]}")
-        backlog_fmt = []
-        for bi in generated_backlog[:15]:
-            acs = bi.get("acceptance_criteria", [])
-            backlog_fmt.append(
-                f"- {bi.get('type','?')}: {bi.get('title','')}\n  Desc: {bi.get('description','')[:160]}\n  ACs: " + "; ".join(acs[:5])
-            )
+        logger.debug("Evaluation agent model in live mode.")
+        try:
+            # Build evaluation prompt using template
+            def _safe_str(val, max_len=None) -> str:
+                """Coerce any value to a safe string and optionally truncate."""
+                try:
+                    s = "" if val is None else (val if isinstance(val, str) else str(val))
+                except Exception:
+                    s = ""
+                return s[:max_len] if (max_len is not None) else s
+
+            # ADO items context
+            ado_items_fmt = []
+            for item in (retrieved_context.get("ado_items") or [])[:5]:
+                if not isinstance(item, dict):
+                    continue
+                work_item_id = _safe_str(item.get("work_item_id", "?"))
+                title = _safe_str(item.get("title"), 200)
+                desc = _safe_str(item.get("description"), 120)
+                ado_items_fmt.append(f"- [{work_item_id}] {title} :: {desc}")
+
+            # Architecture constraints context
+            arch_fmt = []
+            for c in (retrieved_context.get("architecture_constraints") or [])[:5]:
+                if not isinstance(c, dict):
+                    continue
+                fname = _safe_str(c.get("file_name", "constraint"))
+                text = _safe_str(c.get("text"), 120)
+                arch_fmt.append(f"- {fname} :: {text}")
+
+            # Generated backlog context
+            backlog_fmt = []
+            for bi in (generated_backlog or [])[:15]:
+                if not isinstance(bi, dict):
+                    # Skip non-dict items to avoid runtime errors
+                    continue
+                # Acceptance criteria may be None, string, or list
+                acs_raw = bi.get("acceptance_criteria")
+                if acs_raw is None:
+                    acs_list = []
+                elif isinstance(acs_raw, (list, tuple)):
+                    acs_list = [_safe_str(x, 160) for x in acs_raw if x is not None][:5]
+                else:
+                    acs_list = [_safe_str(acs_raw, 160)]
+
+                bi_type = _safe_str(bi.get("type", "?"))
+                bi_title = _safe_str(bi.get("title"), 200)
+                bi_desc = _safe_str(bi.get("description"), 160)
+                backlog_fmt.append(
+                    f"- {bi_type}: {bi_title}\n  Desc: {bi_desc}\n  ACs: " + "; ".join(acs_list)
+                )
+            logger.debug("Evaluation agent model in input context prepared.")
+        except Exception as e:
+            logger.exception("Failed preparing evaluation input context: %s", e)
+            raise
 
         user_prompt = prompt_loader.format_user_prompt(
             "evaluation_agent",
@@ -151,19 +182,37 @@ def create_evaluation_agent(run_id: str):
             backlog_items_formatted=os.linesep.join(backlog_fmt) if backlog_fmt else "None",
             evaluation_schema=json.dumps(evaluation_schema, indent=2)
         )
+        logger.debug("Evaluation agent model input prompt: %s", user_prompt)
 
         try:
-            agent = Agent(model=model, system_prompt=evaluation_system_prompt, tools=[], callback_handler=None)
-            llm_response = agent(user_prompt)
-            llm_text = str(llm_response)
-            eval_obj = json.loads(llm_text)
-            # Basic validation
-            for key in ["completeness", "relevance", "quality"]:
-                if key not in eval_obj or "score" not in eval_obj[key]:
-                    raise ValueError(f"Evaluation missing {key}.score")
-            if "overall_score" not in eval_obj:
-                scores = [eval_obj[k]["score"] for k in ["completeness", "relevance", "quality"]]
-                eval_obj["overall_score"] = round(sum(scores) / len(scores), 2)
+            agent = Agent(model=model, system_prompt=evaluation_system_prompt)
+            agent_result = agent(
+                user_prompt,
+                structured_output_model=EvaluationOut,
+            )
+            logger.debug("Evaluation agent model output: %s", agent_result)
+            evaluation: EvaluationOut = agent_result.structured_output  # type: ignore[assignment]
+
+            # Ensure overall_score present; compute mean if missing
+            if evaluation.overall_score is None:
+                try:
+                    scores = [
+                        evaluation.completeness.score,
+                        evaluation.relevance.score,
+                        evaluation.quality.score,
+                    ]
+                    evaluation.overall_score = round(sum(scores) / len(scores), 2)
+                except Exception:
+                    pass
+
+            logger.debug("Evaluation agent model output parsed: %s", evaluation)
+            # Convert to plain dict for persistence/return
+            try:
+                eval_obj = evaluation.model_dump()
+            except Exception:
+                eval_obj = json.loads(evaluation.json())
+            logger.debug("Evaluation agent model output dict: %s", eval_obj)
+
             result = {
                 "status": "success",
                 "run_id": run_id,
@@ -182,8 +231,21 @@ def create_evaluation_agent(run_id: str):
                 with open(eval_file, "a") as f:
                     f.write(json.dumps(result) + "\n")
             return json.dumps(result, indent=2)
+        except (StructuredOutputException, ValidationError) as e:
+            logger.exception("Evaluation structured output failed: %s", e)
+            return json.dumps({
+                "status": "error",
+                "error": f"Evaluation structured output failed: {e}",
+                "run_id": run_id,
+                "model_used": model_id,
+            }, indent=2)
         except Exception as e:
             logger.exception("Evaluation agent failed: %s", e)
-            return json.dumps({"status": "error", "error": f"Evaluation failed: {e}", "run_id": run_id}, indent=2)
+            return json.dumps({
+                "status": "error",
+                "error": f"Evaluation failed: {e}",
+                "run_id": run_id,
+                "model_used": model_id,
+            }, indent=2)
 
     return evaluate_backlog_quality

@@ -12,7 +12,8 @@ from agents.evaluation_agent import create_evaluation_agent
 
 @pytest.mark.parametrize("mode", ["live", "batch"])
 def test_evaluation_agent_mock(mode):
-    os.environ["EVALUATION_AGENT_MOCK"] = "1"
+    # Set to "1" to enable mock mode
+    os.environ["EVALUATION_AGENT_MOCK"] = "0"
     run_id = str(uuid.uuid4())
     
     # Ensure run directory exists for file writing
