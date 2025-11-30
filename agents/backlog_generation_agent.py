@@ -8,6 +8,7 @@ import yaml
 import logging
 from typing import Dict, Any, List, Union
 from pathlib import Path
+from pydantic import BaseModel, ValidationError
 # Import OpenAI lazily inside the factory function to allow tests to run
 # in environments where the `openai` package isn't installed.
 from strands import tool
@@ -17,6 +18,39 @@ from .model_factory import ModelFactory
 
 # Module logger
 logger = logging.getLogger(__name__)
+
+
+# Pydantic models for strict validation of LLM output
+class BacklogItemIn(BaseModel):
+    type: str
+    title: str
+    description: str | None = None
+    acceptance_criteria: List[str] | None = None
+    parent_reference: str | None = None
+    rationale: str | None = None
+
+    class Config:
+        extra = "allow"
+
+
+class BacklogResponseIn(BaseModel):
+    backlog_items: List[BacklogItemIn]
+
+    class Config:
+        extra = "allow"
+
+
+def _pydantic_validate_response(payload: Dict[str, Any]) -> BacklogResponseIn:
+    """Validate payload using Pydantic (v1/v2 compatible)."""
+    # Pydantic v2 uses model_validate, v1 uses parse_obj
+    try:
+        # type: ignore[attr-defined]
+        return BacklogResponseIn.model_validate(payload)  # noqa: F821
+    except AttributeError:
+        return BacklogResponseIn.parse_obj(payload)
+    except Exception:
+        # Re-raise as ValidationError for unified handling
+        raise
 
 
 def create_backlog_generation_agent(run_id: str):
@@ -142,25 +176,7 @@ def create_backlog_generation_agent(run_id: str):
 
     logger.debug("Final params after merging prompt defaults: %s", params)
     
-    def _safe_json_extract(text: str) -> Dict[str, Any]:
-        """Attempt to parse JSON, falling back to extracting first {...} block."""
-        if text is None:
-            return {}
-        if isinstance(text, (dict, list)):
-            return text  # already parsed
-        try:
-            return json.loads(text)
-        except Exception:
-            pass
-        import re
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                logger.debug("Failed to parse JSON block from text during safe extract")
-                return {}
-        return {}
+    # Removed _safe_json_extract: we now rely on strict JSON parsing and Pydantic validation
 
     @tool
     def generate_backlog(
@@ -189,7 +205,11 @@ def create_backlog_generation_agent(run_id: str):
         try:
             # Parse input (support structured tool calls and legacy JSON string)
             if segment_data is not None and (segment_id is None and segment_text is None):
-                data = _safe_json_extract(segment_data)
+                # Accept dict (already structured) or JSON string strictly
+                if isinstance(segment_data, (dict, list)):
+                    data = segment_data
+                else:
+                    data = json.loads(segment_data)
                 segment_id = data.get("segment_id", 0)
                 segment_text = data.get("segment_text", "")
                 intent_labels = data.get("intent_labels", [])
@@ -320,20 +340,26 @@ def create_backlog_generation_agent(run_id: str):
             except Exception:
                 result_text = str(response)
             logger.debug("Raw LLM response text length=%s", len(result_text) if result_text else 0)
-            # First try strict JSON, then fall back to best-effort extraction
+            # Strict JSON parse
+            result = json.loads(result_text)
+
+            # Pydantic validation - only proceed and write when validation succeeds
             try:
-                result = json.loads(result_text)
-            except json.JSONDecodeError:
-                logger.debug("Strict JSON decode failed, attempting safe extract")
-                result = _safe_json_extract(result_text)
-            
-            # Validate structure
-            if not isinstance(result, dict) or "backlog_items" not in result:
-                logger.warning("LLM response missing 'backlog_items', falling back to mock/raise: %s", result)
-                # If we still didn't get a valid structure, fall back to mock path
-                raise json.JSONDecodeError("Missing 'backlog_items' key in response", result_text or "", 0)
-            
-            backlog_items = result["backlog_items"]
+                validated = _pydantic_validate_response(result)
+            except ValidationError as ve:
+                logger.warning("Backlog Generation Agent: Validation failed, using fallback. Errors: %s", ve)
+                raise json.JSONDecodeError("Validation failed for LLM response", result_text or "", 0)
+
+            backlog_items_models = validated.backlog_items
+            # Convert to plain dicts for normalization / writing
+            backlog_items = []
+            if hasattr(backlog_items_models, "__iter__"):
+                for m in backlog_items_models:
+                    try:
+                        item_dict = m.model_dump() if hasattr(m, "model_dump") else m.dict()
+                    except Exception:
+                        item_dict = dict(m)
+                    backlog_items.append(item_dict)
             
             # Assign internal IDs
             item_counter = {"epic": 1, "feature": 1, "story": 1}
