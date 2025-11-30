@@ -12,6 +12,7 @@ from strands.telemetry import StrandsTelemetry
 from strands.session.file_session_manager import FileSessionManager
 from .model_factory import ModelFactory
 import logging
+from agents.supervisor_helper import SupervisorRunHelper
 
 # Import specialized agents and tools
 from agents.segmentation_agent import create_segmentation_agent
@@ -89,21 +90,9 @@ class SupervisorAgent:
 
         self.current_run_id = run_id
 
-        # Track backlog file state before processing to detect new generation
-        runs_dir = Path("runs")
-        run_dir = runs_dir / run_id
-        backlog_file = run_dir / "generated_backlog.jsonl"
-        ado_result_file = run_dir / "ado_export_last.json"
-        tagging_file = run_dir / "tagging.jsonl"
-        backlog_existed_before = backlog_file.exists()
-        backlog_mtime_before = backlog_file.stat().st_mtime if backlog_existed_before else None
-        backlog_size_before = backlog_file.stat().st_size if backlog_existed_before else None
-        ado_existed_before = ado_result_file.exists()
-        ado_mtime_before = ado_result_file.stat().st_mtime if ado_existed_before else None
-        ado_size_before = ado_result_file.stat().st_size if ado_existed_before else None
-        tagging_existed_before = tagging_file.exists()
-        tagging_mtime_before = tagging_file.stat().st_mtime if tagging_existed_before else None
-        tagging_size_before = tagging_file.stat().st_size if tagging_existed_before else None
+        # Snapshot file state before processing to detect new generation later
+        helper = SupervisorRunHelper(self.logger)
+        before_snapshot = helper.snapshot_before(run_id)
 
         # Determine model to use (override > factory default)
         model_id = model_override or ModelFactory.get_default_model_id()
@@ -200,8 +189,7 @@ class SupervisorAgent:
         try:
             # Run agent in thread for async compatibility
             # Log approximate input tokens for debugging
-            approx_inp_tokens = estimate_tokens(full_query)
-            self.logger.info("Supervisor: input tokens approx=%s", approx_inp_tokens)
+            helper.log_input_tokens(full_query)
             # Ask the agent once; Strands interprets tool calls internally
             response = await asyncio.to_thread(agent, full_query)
             assistant_message = str(response)
@@ -233,47 +221,16 @@ class SupervisorAgent:
                 }
             }
 
-            # Detect if ADO export result was produced during this message handling
-            try:
-                if ado_result_file.exists():
-                    am_after = ado_result_file.stat().st_mtime
-                    as_after = ado_result_file.stat().st_size
-                    if (not ado_existed_before) or (am_after != ado_mtime_before) or (as_after != ado_size_before):
-                        result["response_type"] = "ado_export"
-                        self.logger.info("Supervisor: Detected ADO export update")
-                # If not ADO, detect tagging completion/update first (so tagging view wins over backlog when both happen)
-                if "response_type" not in result and tagging_file.exists():
-                    tm_after = tagging_file.stat().st_mtime
-                    ts_after = tagging_file.stat().st_size
-                    if (not tagging_existed_before) or (tm_after != tagging_mtime_before) or (ts_after != tagging_size_before):
-                        result["response_type"] = "tagging"
-                        self.logger.info("Supervisor: Detected tagging update")
-                # If not ADO or tagging, detect backlog generation/update
-                if "response_type" not in result and backlog_file.exists():
-                    mtime_after = backlog_file.stat().st_mtime
-                    size_after = backlog_file.stat().st_size
-                    if (not backlog_existed_before) or (mtime_after != backlog_mtime_before) or (size_after != backlog_size_before):
-                        result["response_type"] = "backlog_generated"
-                        self.logger.info("Supervisor: Detected backlog generation/update")
-                        # Optional auto-tagging (disabled by default for chat mode).
-                        # Enable by setting SUPERVISOR_AUTO_TAGGING=1 in the environment.
-                        if os.getenv("SUPERVISOR_AUTO_TAGGING") == "1":
-                            try:
-                                tagging_agent = create_tagging_agent(run_id)
-                                tag_out_str = tagging_agent()  # batch mode: reads generated_backlog.jsonl and writes tagging.jsonl
-                                result["status"]["auto_tagging"] = True
-                                result["status"]["auto_tagging_result"] = tag_out_str[:500]
-                                # Prefer showing tagging view if tagging file now exists
-                                if tagging_file.exists():
-                                    result["response_type"] = "tagging"
-                                    self.logger.info("Supervisor: Auto-tagging completed")
-                            except Exception as e:
-                                result["status"]["auto_tagging"] = False
-                                result["status"]["auto_tagging_error"] = str(e)
-                                self.logger.warning("Supervisor: Auto-tagging error: %s", e)
-            except Exception:
-                # Non-fatal; ignore detection errors
-                self.logger.debug("Supervisor: Side-effect detection encountered an error; continuing")
+            # Detect side-effects to classify response and optional auto-tagging
+            detection = helper.detect_response_type(
+                run_id=run_id,
+                before=before_snapshot,
+                enable_auto_tagging=(os.getenv("SUPERVISOR_AUTO_TAGGING") == "1")
+            )
+            if detection.get("response_type"):
+                result["response_type"] = detection["response_type"]
+            if detection.get("status_updates"):
+                result["status"].update(detection["status_updates"]) 
 
             return result
         except Exception as e:
