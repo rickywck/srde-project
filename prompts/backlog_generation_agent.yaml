@@ -28,6 +28,7 @@ system_prompt: |
   - Ready for development team consumption
 
   IMPORTANT: Always return valid JSON with a "backlog_items" array. Each item must have: type, title, description, acceptance_criteria (for stories), parent_reference, and rationale.
+  Return ONLY the raw JSON object — no markdown, no code fences, and no additional commentary before or after the JSON.
 
 user_prompt_template: |
   # ORIGINAL SEGMENT TO ANALYZE
@@ -58,22 +59,21 @@ user_prompt_template: |
   5. Reference parent items where appropriate
 
   Return your response as a JSON object with this structure:
-  ```json
-  {{
+    {{
       "backlog_items": [
-          {{
-              "type": "Epic|Feature|Story",
-              "title": "Clear, concise title",
-              "description": "Detailed description",
-              "acceptance_criteria": ["AC1", "AC2", "AC3"],
-              "parent_reference": "Reference to parent epic/feature if applicable",
-              "rationale": "Why this item is needed based on segment and context"
-          }}
+        {{
+          "type": "Epic|Feature|Story",
+          "title": "Clear, concise title",
+          "description": "Detailed description",
+          "acceptance_criteria": ["AC1", "AC2", "AC3"],
+          "parent_reference": "Reference to parent epic/feature if applicable",
+          "rationale": "Why this item is needed based on segment and context"
+        }}
       ]
-  }}
-  ```
+    }}
 
   Guidelines:
+    - Output raw JSON only (no code fences, no markdown, no extra text)
   - Epic: High-level business objective (use when segment describes major initiative)
   - Feature: Specific capability within an epic (use for substantial functionality)
   - Story: User-facing deliverable (use for concrete, implementable work)

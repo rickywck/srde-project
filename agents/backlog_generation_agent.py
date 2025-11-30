@@ -6,6 +6,7 @@ import os
 import json
 import yaml
 import logging
+import re
 from typing import Dict, Any, List, Union
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
@@ -51,6 +52,65 @@ def _pydantic_validate_response(payload: Dict[str, Any]) -> BacklogResponseIn:
     except Exception:
         # Re-raise as ValidationError for unified handling
         raise
+
+
+def extract_json(text: str) -> str | None:
+    """Extract a JSON object/array from text.
+
+    Handles common cases where responses are wrapped in markdown code fences or
+    contain leading/trailing commentary. Strategy:
+    1) Remove/return content inside first triple-backtick block (preferring json fences)
+    2) Fallback to locating the first '{' or '[' and return the largest balanced block
+    """
+    if not text:
+        return None
+
+    # Try to capture a fenced block first (```json ... ``` or ``` ... ```)
+    m = re.search(r"```\s*json\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # Fallback: find the first JSON opener and match braces/brackets
+    start = None
+    opener = None
+    for i, ch in enumerate(text):
+        if ch in ("{", "["):
+            start = i
+            opener = ch
+            break
+    if start is None:
+        return None
+
+    pairs = {"{": "}", "[": "]"}
+    closer = pairs[opener]
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        else:
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == opener:
+                stack.append(ch)
+            elif ch == closer:
+                if stack:
+                    stack.pop()
+                if not stack:
+                    return text[start : i + 1].strip()
+    return None
 
 
 def create_backlog_generation_agent(run_id: str):
@@ -201,7 +261,7 @@ def create_backlog_generation_agent(run_id: str):
         Returns:
             JSON string containing generated backlog items (epics, features, stories)
         """
-        
+
         try:
             # Parse input (support structured tool calls and legacy JSON string)
             if segment_data is not None and (segment_id is None and segment_text is None):
@@ -334,21 +394,56 @@ def create_backlog_generation_agent(run_id: str):
                 logger.error("LLM call failed after retries: %s", last_err)
                 raise RuntimeError(f"LLM call failed after retries: {last_err}")
 
-            # Parse response
-            try:
-                result_text = response.choices[0].message.content if hasattr(response.choices[0].message, "content") else str(response)
-            except Exception:
-                result_text = str(response)
-            logger.debug("Raw LLM response text length=%s", len(result_text) if result_text else 0)
-            # Strict JSON parse
-            result = json.loads(result_text)
+            # Parse/validate with sanitization; on failure, retry once with stricter instruction
+            def _parse_and_validate(text_payload: str):
+                cleaned = extract_json(text_payload) or (text_payload or "").strip()
+                if cleaned != text_payload:
+                    logger.debug("Sanitized LLM output: trimmed from %s to %s chars", len(text_payload or ""), len(cleaned or ""))
+                data = json.loads(cleaned)
+                try:
+                    return _pydantic_validate_response(data)
+                except ValidationError as ve_:
+                    logger.warning("Backlog Generation Agent: Validation failed: %s", ve_)
+                    raise json.JSONDecodeError("Validation failed for LLM response", cleaned or "", 0)
 
-            # Pydantic validation - only proceed and write when validation succeeds
             try:
-                validated = _pydantic_validate_response(result)
-            except ValidationError as ve:
-                logger.warning("Backlog Generation Agent: Validation failed, using fallback. Errors: %s", ve)
-                raise json.JSONDecodeError("Validation failed for LLM response", result_text or "", 0)
+                # Initial attempt
+                try:
+                    result_text = response.choices[0].message.content if hasattr(response.choices[0].message, "content") else str(response)
+                except Exception:
+                    result_text = str(response)
+                logger.debug("Raw LLM response text length=%s", len(result_text) if result_text else 0)
+                #logger.debug("Raw LLM response text %s", result_text)
+                validated = _parse_and_validate(result_text)
+            except json.JSONDecodeError:
+                logger.info("Backlog Generation Agent: Parse/validation failed; retrying once with strict JSON-only instruction")
+                strict_suffix = (
+                    "\n\nIMPORTANT: Return ONLY a single valid JSON object matching the schema above. "
+                    "No markdown, no code fences, no commentary. If you cannot produce valid JSON, respond EXACTLY with: INVALID_JSON"
+                )
+                strict_prompt = prompt + strict_suffix
+                # Execute a second call with the stricter instruction
+                try:
+                    response2 = openai_client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": strict_prompt},
+                        ],
+                        temperature=params.get("temperature", 0.7),
+                        max_tokens=eff_max_tokens,
+                        **({"response_format": {"type": params.get("response_format", "json_object")}} if not prefer_no_format else {})
+                    )
+                    try:
+                        result_text2 = response2.choices[0].message.content if hasattr(response2.choices[0].message, "content") else str(response2)
+                    except Exception:
+                        result_text2 = str(response2)
+                    if (result_text2 or "").strip() == "INVALID_JSON":
+                        raise json.JSONDecodeError("Model indicated INVALID_JSON", result_text2, 0)
+                    validated = _parse_and_validate(result_text2)
+                except Exception as e2:
+                    logger.warning("Backlog Generation Agent: Strict retry failed: %s", e2, exc_info=True)
+                    raise json.JSONDecodeError("Strict retry failed", "", 0)
 
             backlog_items_models = validated.backlog_items
             # Convert to plain dicts for normalization / writing
