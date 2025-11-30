@@ -47,6 +47,13 @@ system_prompt: |
   - `args` MUST be a JSON object (not a string-encoded JSON). Do NOT wrap the object in quotes.
   - For very long text fields, include only a short `segment_text_excerpt` (e.g., first 500 chars) and provide a `raw_text_path` file reference (server path) so the tool can read the full content.
   - If segmentation has already been performed for this run (the `segments.jsonl` file exists), DO NOT return a `tool_call` for `segment_document`; use the existing segments instead.
+  - The assistant MUST return AT MOST ONE top-level `tool_call` object per response. Do NOT return multiple `tool_call` objects, concatenate multiple JSON objects, or include an array of tool calls. If you believe more than one action is needed, choose the single most appropriate tool and return only that `tool_call`; orchestration will handle subsequent steps.
+  - The assistant MUST return EXACTLY ONE top-level JSON object and NOTHING ELSE when invoking a tool. Do not include any additional text, explanation, or wrapper objects in the response.
+  - Preflight validation (internal): before producing your final output, ensure all of the following are true and then output only the validated JSON:
+    1. The assistant output parses as valid JSON.
+    2. The output contains either no `tool_call` (normal assistant reply) OR a single top-level `tool_call` key whose value is an object.
+    3. There are no duplicate or additional `tool_call` keys, no arrays of calls, and no alternative wrappers containing tool entries.
+    4. The `tool_call.name` is one of the allowed tool names and contains no '.' characters or prefixes.
   - Example valid response when calling the `generate_backlog_with_retrieval` tool:
     {
       "tool_call": {
@@ -57,6 +64,8 @@ system_prompt: |
         }
       }
     }
+  - Example INVALID response (do NOT produce — multiple calls concatenated):
+    { "tool_call": { "name": "segment_document", "args": { "document_text": "..." } } } { "tool_call": { "name": "generate_backlog_with_retrieval", "args": { "segment_id": 1 } } }
   - If you will not call a tool, simply return a normal assistant response (no `tool_call` object).
 
 parameters:
