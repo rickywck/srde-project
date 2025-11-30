@@ -7,9 +7,7 @@ import os
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-import yaml
 from strands import Agent
-from strands.models.openai import OpenAIModel
 from strands.telemetry import StrandsTelemetry
 from strands.session.file_session_manager import FileSessionManager
 from .model_factory import ModelFactory
@@ -52,63 +50,16 @@ class SupervisorAgent:
     """
     
     def __init__(self, config_path: str = "config.poc.yaml", sessions_dir: str = "sessions"):
-        """Initialize supervisor with configuration and session management"""
-        # Use ModelFactory to load config for consistency
-        try:
-            self.config = ModelFactory._load_config(config_path)
-        except Exception:
-            self.config = self._load_config(config_path)
-
+        """Initialize supervisor with session management and prompt configuration only."""
         # Module logger
         self.logger = logging.getLogger(__name__)
 
-        # Initialize OpenAI configuration
-        api_key = os.getenv(self.config["openai"]["api_key_env_var"])
-        if not api_key:
-            raise ValueError(f"OpenAI API key not found in environment variable: {self.config['openai']['api_key_env_var']}")
-
-        # Ensure OpenAI API key is set in environment for Strands and child agents
-        os.environ["OPENAI_API_KEY"] = api_key
-        os.environ["OPENAI_CHAT_MODEL"] = self.config["openai"]["chat_model"]
-
-        # Load prompts from external configuration
+        # Load prompts from external configuration (agent's own YAML)
         prompt_loader = get_prompt_loader()
-        prompt_config = prompt_loader.load_prompt("supervisor_agent")
+        prompt_loader.load_prompt("supervisor_agent")
         self.system_prompt = prompt_loader.get_system_prompt("supervisor_agent")
-        raw_model_params = prompt_loader.get_parameters("supervisor_agent") or {}
-
-        # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
-        agent_max_tokens = raw_model_params.get("max_completion_tokens") or raw_model_params.get("max_output_tokens") or raw_model_params.get("max_tokens")
-        app_max_tokens = self.config.get("openai", {}).get("max_tokens")
-        if agent_max_tokens is not None:
-            eff_max_tokens = int(agent_max_tokens)
-        elif app_max_tokens is not None:
-            eff_max_tokens = int(app_max_tokens)
-        else:
-            eff_max_tokens = None
-
-        model_params = {}
-        if eff_max_tokens is not None:
-            model_params["max_completion_tokens"] = eff_max_tokens
-
-        # Initialize OpenAI model for Strands via ModelFactory
-        try:
-            model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-            self.model = model_descriptor
-            # expose model id for compatibility
-            try:
-                self.config["openai"]["chat_model"] = getattr(model_descriptor, "model_id", self.config.get("openai", {}).get("chat_model"))
-            except Exception:
-                pass
-        except Exception as e:
-            # Fallback to direct OpenAIModel creation (best-effort)
-            self.logger = logging.getLogger(__name__)
-            self.logger.exception("ModelFactory failed to create model for supervisor: %s", e)
-            fallback_model_id = ModelFactory.get_default_model_id(config_path)
-            try:
-                self.model = OpenAIModel(model_id=fallback_model_id, params=(model_params if model_params else None))
-            except Exception:
-                self.model = None
+        self.prompt_params = prompt_loader.get_parameters("supervisor_agent") or {}
+        self.logger.debug("Supervisor: Loaded prompt parameters: %s", list(self.prompt_params.keys()))
 
         # Session management
         self.sessions_dir = sessions_dir
@@ -118,61 +69,8 @@ class SupervisorAgent:
 
         # Track current run_id for tools
         self.current_run_id = None
-    
-    def _load_config(self, config_path: str) -> Dict[str, Any]:
-        """Load configuration from YAML file"""
-        if not os.path.exists(config_path):
-            # Return default config if file doesn't exist
-            return {
-                "openai": {
-                    "api_key_env_var": "OPENAI_API_KEY",
-                    "chat_model": "gpt-4.1-mini"
-                }
-            }
-        
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f)
 
-    def _safe_json_extract(self, text: str) -> Optional[Dict[str, Any]]:
-        """Try parsing text as JSON; otherwise extract the first {...} block and parse it."""
-        if text is None:
-            return None
-        if isinstance(text, (dict, list)):
-            return text
-        try:
-            return json.loads(text)
-        except Exception:
-            pass
-        import re
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return None
-        return None
-
-    def _extract_tool_call(self, text: str) -> Optional[Dict[str, Any]]:
-        """Extract a top-level `tool_call` object from assistant text if present."""
-        parsed = self._safe_json_extract(text)
-        if isinstance(parsed, dict):
-            # direct object with tool_call
-            if "tool_call" in parsed:
-                return parsed.get("tool_call")
-            # sometimes the assistant returns the tool_call object directly
-            if parsed.get("name") and parsed.get("args") is not None:
-                return parsed
-        # fallback: regex search for '"tool_call": {...}' and parse that fragment
-        import re
-        m = re.search(r'"tool_call"\s*:\s*\{[\s\S]*?\}', text)
-        if m:
-            fragment = "{" + m.group(0) + "}"
-            try:
-                obj = json.loads(fragment)
-                return obj.get("tool_call")
-            except Exception:
-                return None
-        return None
+    # Removed: _load_config, _safe_json_extract, _extract_tool_call
 
     
     
@@ -207,11 +105,11 @@ class SupervisorAgent:
         tagging_mtime_before = tagging_file.stat().st_mtime if tagging_existed_before else None
         tagging_size_before = tagging_file.stat().st_size if tagging_existed_before else None
 
-        # Determine model to use (override > config default)
-        default_model = self.config.get("openai", {}).get("chat_model", os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini"))
-        model_id = model_override or default_model
-        # Ensure env var aligns for child tools created below
+        # Determine model to use (override > factory default)
+        model_id = model_override or ModelFactory.get_default_model_id()
+        # Ensure env var aligns for child tools created below (compatibility)
         os.environ["OPENAI_CHAT_MODEL"] = model_id
+        self.logger.info("Supervisor: Using model_id=%s", model_id)
 
         # Setup session manager for this run
         session_manager = FileSessionManager(
@@ -223,7 +121,9 @@ class SupervisorAgent:
         agent = None
         if run_id in self.agents_cache and self.agent_models.get(run_id) == model_id:
             agent = self.agents_cache[run_id]
+            self.logger.debug("Supervisor: Reusing cached agent for run_id=%s", run_id)
         else:
+            self.logger.info("Supervisor: Creating agent for run_id=%s with model_id=%s", run_id, model_id)
             segmentation_agent = create_segmentation_agent(run_id)
             backlog_generation_agent = create_backlog_generation_agent(run_id)
             tagging_agent = create_tagging_agent(run_id)
@@ -231,27 +131,29 @@ class SupervisorAgent:
             evaluation_agent = create_evaluation_agent(run_id)
             ado_writer_tool = create_ado_writer_tool(run_id)
 
-            # Create a model instance for this session via ModelFactory (no hardcoded token default)
-            _raw_params = get_prompt_loader().get_parameters("supervisor_agent") or {}
-            _agent_max = _raw_params.get("max_completion_tokens") or _raw_params.get("max_output_tokens") or _raw_params.get("max_tokens")
-            _app_max = self.config.get("openai", {}).get("max_tokens")
-            if _agent_max is not None:
-                _eff = int(_agent_max)
-            elif _app_max is not None:
-                _eff = int(_app_max)
-            else:
-                _eff = None
-            session_model_params = {}
-            if _eff is not None:
-                session_model_params["max_completion_tokens"] = _eff
+            # Create a model instance for this session via ModelFactory only
             try:
-                session_model = ModelFactory.create_openai_model(config_path=config_path, model_params=session_model_params, model_id_override=model_id)
-            except Exception:
-                # best-effort fallback
-                try:
-                    session_model = OpenAIModel(model_id=model_id, params=(session_model_params if session_model_params else None))
-                except Exception:
-                    session_model = None
+                session_model = ModelFactory.create_openai_model_for_agent(
+                    agent_params=self.prompt_params,
+                    model_id_override=model_id,
+                )
+                self.logger.debug(
+                    "Supervisor: Session model initialized (model_id=%s, class=%s)",
+                    getattr(session_model, "model_id", model_id),
+                    type(session_model).__name__ if session_model else "None",
+                )
+            except Exception as e:
+                self.logger.exception("Supervisor: Failed to create session model: %s", e)
+                return {
+                    "response": f"Initialization error: {str(e)}",
+                    "status": {
+                        "run_id": run_id,
+                        "error": str(e),
+                        "mode": "strands_orchestration",
+                        "framework": "aws_strands",
+                        "session_managed": True
+                    }
+                }
 
             agent = Agent(
                 model=session_model,
@@ -279,6 +181,7 @@ class SupervisorAgent:
             )
             self.agents_cache[run_id] = agent
             self.agent_models[run_id] = model_id
+            self.logger.info("Supervisor: Agent created with %d tools", len(agent.tools) if hasattr(agent, "tools") else 0)
 
 
         # Build context-aware query for the agent
@@ -299,42 +202,20 @@ class SupervisorAgent:
             # Log approximate input tokens for debugging
             approx_inp_tokens = estimate_tokens(full_query)
             self.logger.info("Supervisor: input tokens approx=%s", approx_inp_tokens)
-            # Ask the agent; if it returns a tool_call, validate its structure and ask for a retry if malformed
-            MAX_RETRIES = 2
-            assistant_message = None
-            response = None
-            for attempt in range(MAX_RETRIES + 1):
-                response = await asyncio.to_thread(agent, full_query)
-                assistant_message = str(response)
-                # If there's no tool_call pattern, accept the response
-                tool_call = self._extract_tool_call(assistant_message)
-                if not tool_call:
-                    break
-                # Validate args is an object
-                args = tool_call.get("args") if isinstance(tool_call, dict) else None
-                if isinstance(args, dict):
-                    break
-                # Otherwise ask the agent to reformat the tool_call
-                if attempt < MAX_RETRIES:
-                    self.logger.warning("Supervisor: Detected malformed tool_call, requesting reformat (attempt %s)", attempt+1)
-                    correction_prompt = (
-                        "Your last response included a tool_call with malformed `args`.\n"
-                        "Please RETURN ONLY a single JSON object with `tool_call` and `args` where `args` is a JSON object (not a string).\n"
-                        "Example: {\"tool_call\": {\"name\": \"generate_backlog\", \"args\": {\"segment_id\":12}}}\n"
-                        "Now re-output the corrected `tool_call` object only."
-                    )
-                    # Use the assistant message as context and ask for a corrected output
-                    full_query = correction_prompt + "\n\nPREVIOUS_RESPONSE:\n" + assistant_message
-                    continue
-                else:
-                    self.logger.warning("Supervisor: Max retries reached for tool_call formatting; proceeding with original response")
-                    break
+            # Ask the agent once; Strands interprets tool calls internally
+            response = await asyncio.to_thread(agent, full_query)
+            assistant_message = str(response)
+            tool_calls = getattr(response, 'tool_calls', []) if hasattr(response, 'tool_calls') else []
+            if tool_calls:
+                self.logger.info("Supervisor: Strands tool_calls reported: %s", tool_calls)
+            else:
+                self.logger.debug("Supervisor: No tool_calls reported by Strands")
             conversation_length = len(agent.messages) if hasattr(agent, "messages") else None
             result: Dict[str, Any] = {
                 "response": assistant_message,
                 "status": {
                     "run_id": run_id,
-                    "model": self.config["openai"]["chat_model"],
+                    "model": model_id,
                     "has_document": document_text is not None,
                     "mode": "strands_orchestration",
                     "framework": "aws_strands",
@@ -348,7 +229,7 @@ class SupervisorAgent:
                         "evaluate_backlog_quality",
                         "write_to_ado"
                     ],
-                    "tools_invoked": getattr(response, 'tool_calls', []) if hasattr(response, 'tool_calls') else []
+                    "tools_invoked": tool_calls
                 }
             }
 
@@ -359,18 +240,21 @@ class SupervisorAgent:
                     as_after = ado_result_file.stat().st_size
                     if (not ado_existed_before) or (am_after != ado_mtime_before) or (as_after != ado_size_before):
                         result["response_type"] = "ado_export"
+                        self.logger.info("Supervisor: Detected ADO export update")
                 # If not ADO, detect tagging completion/update first (so tagging view wins over backlog when both happen)
                 if "response_type" not in result and tagging_file.exists():
                     tm_after = tagging_file.stat().st_mtime
                     ts_after = tagging_file.stat().st_size
                     if (not tagging_existed_before) or (tm_after != tagging_mtime_before) or (ts_after != tagging_size_before):
                         result["response_type"] = "tagging"
+                        self.logger.info("Supervisor: Detected tagging update")
                 # If not ADO or tagging, detect backlog generation/update
                 if "response_type" not in result and backlog_file.exists():
                     mtime_after = backlog_file.stat().st_mtime
                     size_after = backlog_file.stat().st_size
                     if (not backlog_existed_before) or (mtime_after != backlog_mtime_before) or (size_after != backlog_size_before):
                         result["response_type"] = "backlog_generated"
+                        self.logger.info("Supervisor: Detected backlog generation/update")
                         # Optional auto-tagging (disabled by default for chat mode).
                         # Enable by setting SUPERVISOR_AUTO_TAGGING=1 in the environment.
                         if os.getenv("SUPERVISOR_AUTO_TAGGING") == "1":
@@ -382,15 +266,18 @@ class SupervisorAgent:
                                 # Prefer showing tagging view if tagging file now exists
                                 if tagging_file.exists():
                                     result["response_type"] = "tagging"
+                                    self.logger.info("Supervisor: Auto-tagging completed")
                             except Exception as e:
                                 result["status"]["auto_tagging"] = False
                                 result["status"]["auto_tagging_error"] = str(e)
+                                self.logger.warning("Supervisor: Auto-tagging error: %s", e)
             except Exception:
                 # Non-fatal; ignore detection errors
-                pass
+                self.logger.debug("Supervisor: Side-effect detection encountered an error; continuing")
 
             return result
         except Exception as e:
+            self.logger.exception("Supervisor: Error during processing: %s", e)
             return {
                 "response": f"I encountered an error processing your request: {str(e)}",
                 "status": {
