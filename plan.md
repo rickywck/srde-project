@@ -97,6 +97,7 @@ Components (kept from full design, simplified behavior):
 - **Segmentation Agent:** Single LLM call to segment document + label intents.
 - **Supervisor:** Orchestrates segmentation, retrieval, generation, tagging, and evaluation.
 - **Backlog Generation Agent:** LLM that takes one segment + retrieved context and outputs epics/features/stories.
+- **Retrieval Backlog Tool:** Combined tool that orchestrates retrieval and generation (primary entry point).
 - **Tagging Agent:** LLM that takes one generated user story + retrieved existing stories and outputs a tag.
 - **Evaluation Agent:** LLM-as-a-judge that evaluates generated backlog quality across multiple dimensions.
 - **ADO Writer (optional for POC):** Simple script to create new items only (no modify/patch logic).
@@ -228,12 +229,12 @@ For each segment:
 
 ### 6.2 Retrieval & Generation (Combined Tool)
 
-The Supervisor invokes `generate_backlog_with_retrieval` (from `retrieval_backlog_tool`) which internally:
+Both the **Supervisor Agent** and the **Backlog Synthesis Workflow** invoke `generate_backlog_with_retrieval` (from `retrieval_backlog_tool`) as the primary method for generation. This tool internally:
 1. Queries Pinecone for ADO items and architecture constraints (using `retrieval_tool` logic).
-2. Calls the Backlog Generation Agent with the retrieved context.
+2. Calls the **Backlog Generation Agent** with the retrieved context.
 3. Returns ONLY the generated backlog items (reducing conversation history).
 
-This combined approach is preferred over separate retrieval and generation steps to minimize token usage in the conversation history.
+This combined approach ensures consistency between chat-based and workflow-based execution and minimizes token usage in the conversation history.
 
 ### 6.3 Prompt Assembly
 

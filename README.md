@@ -36,7 +36,7 @@ See [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md) and [`docs/FRONTE
 
 ### Tools
 
-- **`retrieval_backlog_tool.py`**: Combined retrieval and generation tool. Performs retrieval and backlog generation in a single call to reduce conversation history.
+- **`retrieval_backlog_tool.py`**: The primary tool used by both the Supervisor Agent and Workflow. It combines retrieval and generation into a single call, internally orchestrating `retrieval_tool` and `backlog_generation_agent`.
 - **`retrieval_tool.py`**: Standalone retrieval tool for querying Pinecone for ADO items and architecture constraints.
 - **`ado_writer_tool.py`**: Writes generated backlog items (Epics, Features, Stories) to Azure DevOps.
 - **`file_extractor.py`**: Utility for extracting text content from various file formats.
@@ -247,7 +247,14 @@ openai:
 │   ├── evaluation_agent.py         # Quality assessment (LLM-as-judge)
 │   ├── tagging_input_resolver.py   # Helper for tagging agent
 │   ├── model_factory.py            # Factory for creating LLM instances
+│   ├── model_factory.py            # Factory for creating LLM instances
 │   └── prompt_loader.py            # Centralized prompt management utility
+├── tools/                     # Shared tools and utilities
+│   ├── retrieval_backlog_tool.py   # Combined retrieval + generation (primary tool)
+│   ├── retrieval_tool.py           # Standalone retrieval logic
+│   ├── ado_writer_tool.py          # Azure DevOps writer
+│   ├── file_extractor.py           # Text extraction utility
+│   └── token_utils.py              # Token counting utility
 ├── workflows/                 # Workflow orchestration modules
 │   ├── __init__.py                 # Package exports
 │   ├── backlog_synthesis_workflow.py  # Custom sequential workflow
@@ -340,9 +347,9 @@ Two workflow implementations provide flexibility:
 #### New: Combined Retrieval + Generation Tool
 
 - Tool name: `retrieval_backlog_tool` (function: `generate_backlog_with_retrieval`)
-- Purpose: Performs retrieval and backlog generation in a single tool call and returns only the generation result (retrieval payload is not returned), reducing conversation history size.
-- Typical usage: Provide a segment_id (read from runs/<run_id>/segments.jsonl) and optional intent labels. The tool loads the segment, runs retrieval, then calls the backlog generator with the retrieved context.
-- When to use: Prefer this tool for most segment-based generation. Use generate_backlog when you explicitly want to generate directly from input text without RAG.
+- Purpose: Acts as the main entry point for backlog generation in both the Supervisor Agent and Backlog Synthesis Workflow. It encapsulates the complexity of calling `retrieval_tool` followed by `backlog_generation_agent`.
+- Orchestration: Internally calls `retrieval_tool` to fetch context, then passes that context to `backlog_generation_agent`.
+- Benefit: Reduces conversation history size by returning only the final generated items, keeping raw retrieval context internal.
 
 ### Tagging & Classification
 
