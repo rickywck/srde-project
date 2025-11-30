@@ -10,9 +10,8 @@ import re
 from typing import Dict, Any, List, Union
 from pathlib import Path
 from pydantic import BaseModel, ValidationError
-# Import OpenAI lazily inside the factory function to allow tests to run
-# in environments where the `openai` package isn't installed.
-from strands import tool
+from strands import tool, Agent
+from strands.types.exceptions import StructuredOutputException
 from .prompt_loader import get_prompt_loader
 from tools.token_utils import estimate_tokens
 from .model_factory import ModelFactory
@@ -43,74 +42,17 @@ class BacklogResponseIn(BaseModel):
 
 def _pydantic_validate_response(payload: Dict[str, Any]) -> BacklogResponseIn:
     """Validate payload using Pydantic (v1/v2 compatible)."""
-    # Pydantic v2 uses model_validate, v1 uses parse_obj
     try:
-        # type: ignore[attr-defined]
-        return BacklogResponseIn.model_validate(payload)  # noqa: F821
+        return BacklogResponseIn.model_validate(payload)  # type: ignore[attr-defined]
     except AttributeError:
         return BacklogResponseIn.parse_obj(payload)
-    except Exception:
-        # Re-raise as ValidationError for unified handling
-        raise
 
 
 def extract_json(text: str) -> str | None:
-    """Extract a JSON object/array from text.
-
-    Handles common cases where responses are wrapped in markdown code fences or
-    contain leading/trailing commentary. Strategy:
-    1) Remove/return content inside first triple-backtick block (preferring json fences)
-    2) Fallback to locating the first '{' or '[' and return the largest balanced block
-    """
+    """Deprecated: no longer needed with Strands Structured Output. Retained for compatibility."""
     if not text:
         return None
-
-    # Try to capture a fenced block first (```json ... ``` or ``` ... ```)
-    m = re.search(r"```\s*json\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"```\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-
-    # Fallback: find the first JSON opener and match braces/brackets
-    start = None
-    opener = None
-    for i, ch in enumerate(text):
-        if ch in ("{", "["):
-            start = i
-            opener = ch
-            break
-    if start is None:
-        return None
-
-    pairs = {"{": "}", "[": "]"}
-    closer = pairs[opener]
-    stack: list[str] = []
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        else:
-            if ch == '"':
-                in_string = True
-                continue
-            if ch == opener:
-                stack.append(ch)
-            elif ch == closer:
-                if stack:
-                    stack.pop()
-                if not stack:
-                    return text[start : i + 1].strip()
-    return None
+    return text.strip()
 
 
 def create_backlog_generation_agent(run_id: str):
@@ -186,55 +128,44 @@ def create_backlog_generation_agent(run_id: str):
     else:
         eff_max_tokens = None # Use model default
         
-    # Create a model descriptor from the factory so we can reuse mapped params
-    # while still using the `openai` SDK client for calls.
-    # Pass the configured token cap into model_params so mapping occurs there.
-    model_params = {}
+    # Prepare model params: whitelist only valid OpenAI model parameters
+    allowed_model_param_keys = {
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "top_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "seed",
+        "stop",
+        "n",
+    }
+    model_params: Dict[str, Any] = {}
+    if prompt_params:
+        for k, v in prompt_params.items():
+            if k in allowed_model_param_keys:
+                model_params[k] = v
     if eff_max_tokens is not None:
         model_params["max_completion_tokens"] = eff_max_tokens
-    
+
+    # Create the Strands OpenAIModel via ModelFactory
     try:
-        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-        model_name = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
-        # expose params if available
-        params = getattr(model_descriptor, "params", None) or {}
-        logger.debug("Model descriptor from factory: model_name=%s params=%s", model_name, params)
+        model = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
+        model_name = getattr(model, "model_id", None) or ModelFactory.get_default_model_id(config_path)
+        logger.debug("Initialized Strands OpenAIModel: %s", model_name)
     except Exception as e:
-        # Fall back to ModelFactory default behavior if factory fails for any reason
-        logger.exception("ModelFactory.create_openai_model failed, falling back to env/config defaults: %s", e)
+        logger.exception("Failed to create Strands OpenAIModel: %s", e)
+        model = None
         model_name = ModelFactory.get_default_model_id(config_path)
-        params = {}
-        logger.debug("Fallback model_name=%s params=%s", model_name, params)
 
-    # Import OpenAI lazily so tests that don't have the package can still import this module.
-    OpenAI = None
-    try:
-        from openai import OpenAI as _OpenAI
-        OpenAI = _OpenAI
-        logger.debug("`openai` package available; OpenAI client can be created")
-    except ModuleNotFoundError:
-        logger.warning("`openai` package not installed; running in MOCK mode unless an alternative client is provided")
-
-    openai_client = OpenAI(api_key=api_key) if (api_key and OpenAI is not None) else None
-    
-    # Only set params if not already set by factory descriptor
-    for k, v in (prompt_params or {}).items():
-        if k not in params:
-            params[k] = v
-    
-    # Ensure max_completion_tokens is set in params if we calculated it
-    if eff_max_tokens is not None:
-        params["max_completion_tokens"] = eff_max_tokens
-    elif "max_completion_tokens" in params:
-        # If factory set it (e.g. from model_params), keep it.
-        pass
-    else:
-        # If neither set it, ensure we don't send a default if we want model default.
-        # But wait, if we want model default, we shouldn't send max_tokens at all.
-        # The params dict is used for extra params.
-        pass
-
-    logger.debug("Final params after merging prompt defaults: %s", params)
+    # Initialize Strands Agent with system prompt and model
+    agent = None
+    if model is not None:
+        try:
+            agent = Agent(model=model, system_prompt=system_prompt)
+        except Exception as e:
+            logger.exception("Failed to initialize Strands Agent: %s", e)
+            agent = None
     
     # Removed _safe_json_extract: we now rely on strict JSON parsing and Pydantic validation
 
@@ -346,104 +277,25 @@ def create_backlog_generation_agent(run_id: str):
             approx_total = sys_tok + usr_tok
             logger.debug("Backlog Generation Agent: tokens approx — system=%s, user=%s, total≈%s", sys_tok, usr_tok, approx_total)
             
-            # Check if we have OpenAI client
-            if not openai_client:
-                logger.warning("Backlog Generation Agent: Using MOCK mode (missing OPENAI_API_KEY)")
+            # Ensure we can call the agent
+            if not api_key or agent is None:
+                logger.warning("Backlog Generation Agent: Using MOCK mode (missing OPENAI_API_KEY or agent init failed)")
                 return _mock_generation(segment_id, segment_text, intent_labels, run_id)
-            
-            logger.info("Backlog Generation Agent: Calling LLM to generate backlog items...")
 
-            # Call LLM with resilience to model/format issues
-            # Respect prompt parameter defaults, cap by config if provided.
-            # Map across possible config keys to the modern "max_completion_tokens".
-            # eff_max_tokens is already calculated above.
-
-            def _try_llm_call(use_response_format: bool, mdl: str):
-                logger.debug("LLM call: model=%s use_response_format=%s", mdl, use_response_format)
-                return openai_client.chat.completions.create(
-                    model=mdl,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=params.get("temperature", 0.7),
-                    max_tokens=eff_max_tokens,
-                    **({"response_format": {"type": params.get("response_format", "json_object")}} if use_response_format else {})
-                )
-
-            response = None
-            last_err = None
-            # Disable response_format for models that commonly reject it
-            prefer_no_format = any(k in (model_name or "").lower() for k in ["gpt-4.1", "gpt-5"]) 
-            for attempt, (use_fmt, mdl) in enumerate([
-                (not prefer_no_format, model_name),
-                (False, model_name),
-                (False, "gpt-4o-mini"),
-            ], start=1):
-                try:
-                    response = _try_llm_call(use_fmt, mdl)
-                    if mdl != model_name:
-                        logger.info("Backlog Generation Agent: Fallback model in use: %s", mdl)
-                    break
-                except Exception as e:
-                    last_err = e
-                    logger.warning("Backlog Generation Agent: LLM call attempt %s failed: %s", attempt, e, exc_info=True)
-                    continue
-
-            if response is None:
-                logger.error("LLM call failed after retries: %s", last_err)
-                raise RuntimeError(f"LLM call failed after retries: {last_err}")
-
-            # Parse/validate with sanitization; on failure, retry once with stricter instruction
-            def _parse_and_validate(text_payload: str):
-                cleaned = extract_json(text_payload) or (text_payload or "").strip()
-                if cleaned != text_payload:
-                    logger.debug("Sanitized LLM output: trimmed from %s to %s chars", len(text_payload or ""), len(cleaned or ""))
-                data = json.loads(cleaned)
-                try:
-                    return _pydantic_validate_response(data)
-                except ValidationError as ve_:
-                    logger.warning("Backlog Generation Agent: Validation failed: %s", ve_)
-                    raise json.JSONDecodeError("Validation failed for LLM response", cleaned or "", 0)
-
+            logger.info("Backlog Generation Agent: Calling Strands Agent (%s) with structured output...", model_name)
             try:
-                # Initial attempt
-                try:
-                    result_text = response.choices[0].message.content if hasattr(response.choices[0].message, "content") else str(response)
-                except Exception:
-                    result_text = str(response)
-                logger.debug("Raw LLM response text length=%s", len(result_text) if result_text else 0)
-                #logger.debug("Raw LLM response text %s", result_text)
-                validated = _parse_and_validate(result_text)
-            except json.JSONDecodeError:
-                logger.info("Backlog Generation Agent: Parse/validation failed; retrying once with strict JSON-only instruction")
-                strict_suffix = (
-                    "\n\nIMPORTANT: Return ONLY a single valid JSON object matching the schema above. "
-                    "No markdown, no code fences, no commentary. If you cannot produce valid JSON, respond EXACTLY with: INVALID_JSON"
+                result = agent(
+                    prompt,
+                    structured_output_model=BacklogResponseIn,
                 )
-                strict_prompt = prompt + strict_suffix
-                # Execute a second call with the stricter instruction
-                try:
-                    response2 = openai_client.chat.completions.create(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": strict_prompt},
-                        ],
-                        temperature=params.get("temperature", 0.7),
-                        max_tokens=eff_max_tokens,
-                        **({"response_format": {"type": params.get("response_format", "json_object")}} if not prefer_no_format else {})
-                    )
-                    try:
-                        result_text2 = response2.choices[0].message.content if hasattr(response2.choices[0].message, "content") else str(response2)
-                    except Exception:
-                        result_text2 = str(response2)
-                    if (result_text2 or "").strip() == "INVALID_JSON":
-                        raise json.JSONDecodeError("Model indicated INVALID_JSON", result_text2, 0)
-                    validated = _parse_and_validate(result_text2)
-                except Exception as e2:
-                    logger.warning("Backlog Generation Agent: Strict retry failed: %s", e2, exc_info=True)
-                    raise json.JSONDecodeError("Strict retry failed", "", 0)
+                # Strands returns validated structured output; ensure correct type
+                validated: BacklogResponseIn = result.structured_output  # type: ignore[assignment]
+            except (StructuredOutputException, ValidationError) as e:
+                logger.warning("Backlog Generation Agent: Structured output failed, using fallback. Reason: %s", e)
+                return _mock_generation(segment_id, segment_text, intent_labels, run_id)
+            except Exception as e:
+                logger.exception("Backlog Generation Agent: Agent invocation failed: %s", e)
+                return _mock_generation(segment_id, segment_text, intent_labels, run_id)
 
             backlog_items_models = validated.backlog_items
             # Convert to plain dicts for normalization / writing
@@ -515,8 +367,7 @@ def create_backlog_generation_agent(run_id: str):
             return json.dumps(summary, indent=2)
             
         except json.JSONDecodeError as e:
-            # Fallback: use mock generation if LLM JSON is truncated or invalid
-            logger.warning("Backlog Generation Agent: JSON parse failed, using fallback. Reason: %s", str(e))
+            logger.warning("Backlog Generation Agent: JSON parse failed (legacy path), using fallback. Reason: %s", str(e))
             return _mock_generation(segment_id, segment_text, intent_labels, run_id)
         
         except Exception as e:
@@ -535,94 +386,57 @@ def create_backlog_generation_agent(run_id: str):
 
 
 def _mock_generation(segment_id: int, segment_text: str, intent_labels: list, run_id: str) -> str:
-    """Generate mock backlog items for testing"""
-    
-    # Simple heuristic-based generation
-    mock_items = []
-    
-    # Check intents to decide what to generate
-    has_auth = any("auth" in label.lower() for label in intent_labels)
-    has_performance = any("performance" in label.lower() or "latency" in label.lower() or "optimize" in label.lower() for label in intent_labels)
-    has_offline = any("offline" in label.lower() for label in intent_labels)
-    
-    if has_auth:
-        mock_items.append({
-            "type": "Feature",
-            "title": "Multi-Factor Authentication Implementation",
-            "description": f"Implement multi-factor authentication based on requirements identified in segment analysis. {segment_text[:100]}...",
-            "acceptance_criteria": [],
-            "parent_reference": "Security & Authentication Improvements Epic",
-            "rationale": "Addresses authentication security requirements identified in segment",
-            "internal_id": f"feature_{segment_id}_1",
-            "segment_id": segment_id,
-            "run_id": run_id
-        })
-        mock_items.append({
-            "type": "Story",
-            "title": "As a user, I want to enable MFA with authenticator app",
-            "description": "Allow users to enable multi-factor authentication using TOTP authenticator apps",
-            "acceptance_criteria": [
-                "User can scan QR code to add account to authenticator app",
-                "User must enter verification code to complete MFA setup",
-                "User is prompted for MFA code on subsequent logins",
-                "User can generate backup codes for account recovery"
-            ],
-            "parent_reference": "Multi-Factor Authentication Implementation Feature",
-            "rationale": "Provides secure MFA option using industry-standard TOTP protocol",
-            "internal_id": f"story_{segment_id}_1",
-            "segment_id": segment_id,
-            "run_id": run_id
-        })
-    
-    if has_performance:
-        mock_items.append({
-            "type": "Story",
-            "title": "As a developer, I want optimized database queries with proper indexes",
-            "description": "Add database indexes and optimize slow queries identified in performance analysis",
-            "acceptance_criteria": [
-                "Identify top 10 slowest queries using query analyzer",
-                "Add appropriate indexes to relevant tables",
-                "Query response time improves by at least 50%",
-                "95th percentile API response time is under 200ms"
-            ],
-            "parent_reference": "API Performance Optimization Feature",
-            "rationale": "Addresses performance issues and latency concerns identified in segment",
-            "internal_id": f"story_{segment_id}_2",
-            "segment_id": segment_id,
-            "run_id": run_id
-        })
-    
-    if has_offline:
-        mock_items.append({
+    """Generate simple mock backlog: 1 epic, 1 feature, 1 user story."""
+
+    epic_title = "Sample Epic: Improve User Onboarding"
+    feature_title = "Sample Feature: Guided Onboarding Flow"
+    story_title = "User Story: As a new user, I want a guided setup"
+
+    mock_items = [
+        {
             "type": "Epic",
-            "title": "Mobile Offline Mode Support",
-            "description": "Enable users to access and work with documents without internet connectivity",
-            "acceptance_criteria": [],
+            "title": epic_title,
+            "description": f"High-level initiative derived from segment {segment_id}. {segment_text[:200]}...",
+            "acceptance_criteria": [
+                "Epic goals are defined",
+                "Stakeholders aligned on scope"
+            ],
             "parent_reference": "",
-            "rationale": "Major architectural initiative identified from user research in segment",
+            "rationale": "Mock epic for local testing",
             "internal_id": f"epic_{segment_id}_1",
             "segment_id": segment_id,
-            "run_id": run_id
-        })
-    
-    # Default story if no specific intents matched
-    if not mock_items:
-        mock_items.append({
-            "type": "Story",
-            "title": f"Implement requirements from segment {segment_id}",
-            "description": f"Address requirements identified in segment: {segment_text[:200]}...",
+            "run_id": run_id,
+        },
+        {
+            "type": "Feature",
+            "title": feature_title,
+            "description": "Provide a step-by-step onboarding experience with helpful tips.",
             "acceptance_criteria": [
-                "Requirements are clearly defined",
-                "Implementation meets acceptance criteria",
-                "Changes are tested and reviewed"
+                "Onboarding covers account setup and first action",
+                "Completion rate tracked via analytics"
             ],
-            "parent_reference": "",
-            "rationale": "Generated from segment analysis",
+            "parent_reference": epic_title,
+            "rationale": "Supports the onboarding epic",
+            "internal_id": f"feature_{segment_id}_1",
+            "segment_id": segment_id,
+            "run_id": run_id,
+        },
+        {
+            "type": "User Story",
+            "title": story_title,
+            "description": "Guide users through profile creation and initial configuration.",
+            "acceptance_criteria": [
+                "User completes profile setup in under 3 minutes",
+                "Progress is saved between steps"
+            ],
+            "parent_reference": feature_title,
+            "rationale": "Delivers immediate value in onboarding",
             "internal_id": f"story_{segment_id}_1",
             "segment_id": segment_id,
-            "run_id": run_id
-        })
-    
+            "run_id": run_id,
+        },
+    ]
+
     # Save to file
     output_dir = Path(f"runs/{run_id}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -642,7 +456,7 @@ def _mock_generation(segment_id: int, segment_text: str, intent_labels: list, ru
         "item_counts": {
             "epics": sum(1 for item in mock_items if item.get("type", "").lower() == "epic"),
             "features": sum(1 for item in mock_items if item.get("type", "").lower() == "feature"),
-            "stories": sum(1 for item in mock_items if item.get("type", "").lower() == "story")
+            "stories": sum(1 for item in mock_items if item.get("type", "").lower() in ("story", "user story")),
         },
         "backlog_items": mock_items
     }
