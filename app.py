@@ -15,7 +15,7 @@ import uuid
 import yaml
 from openai import OpenAI
 from pinecone import Pinecone
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -96,7 +96,7 @@ def save_chat_history(run_id: str, role: str, message: str):
     history_file = run_dir / "chat_history.jsonl"
     
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "role": role,
         "message": message
     }
@@ -268,7 +268,7 @@ async def chat(run_id: str, message: ChatMessage):
             run_id=run_id,
             response=response["response"],
             status=response.get("status", {}),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             response_type=response.get("response_type")
         )
     
