@@ -34,6 +34,14 @@ The system uses a **FileSessionManager** and agent caching to maintain conversat
 
 See [`docs/SESSION_MANAGEMENT.md`](docs/SESSION_MANAGEMENT.md) and [`docs/FRONTEND_SESSION_GUIDE.md`](docs/FRONTEND_SESSION_GUIDE.md) for full design and integration details.
 
+### Tools
+
+- **`retrieval_backlog_tool.py`**: Combined retrieval and generation tool. Performs retrieval and backlog generation in a single call to reduce conversation history.
+- **`retrieval_tool.py`**: Standalone retrieval tool for querying Pinecone for ADO items and architecture constraints.
+- **`ado_writer_tool.py`**: Writes generated backlog items (Epics, Features, Stories) to Azure DevOps.
+- **`file_extractor.py`**: Utility for extracting text content from various file formats.
+- **`token_utils.py`**: Utility for counting tokens to manage context window usage.
+
 ### Workflow Orchestration
 
 Two workflow implementations for backlog generation:
@@ -237,11 +245,12 @@ openai:
 │   ├── backlog_generation_agent.py # Backlog item generation with RAG
 │   ├── tagging_agent.py            # Story classification (gap/conflict/new)
 │   ├── evaluation_agent.py         # Quality assessment (LLM-as-judge)
+│   ├── tagging_input_resolver.py   # Helper for tagging agent
+│   ├── model_factory.py            # Factory for creating LLM instances
 │   └── prompt_loader.py            # Centralized prompt management utility
 ├── workflows/                 # Workflow orchestration modules
 │   ├── __init__.py                 # Package exports
 │   ├── backlog_synthesis_workflow.py  # Custom sequential workflow
-│   └── strands_workflow.py         # Strands native workflow
 ├── prompts/                   # External YAML prompt configurations
 │   ├── segmentation_agent.yaml
 │   ├── backlog_generation_agent.yaml
@@ -250,7 +259,8 @@ openai:
 │   └── supervisor_agent.yaml
 ├── ingestion/                 # Data loading utilities
 │   ├── ado_loader.py              # Load ADO backlog into Pinecone
-│   └── arch_loader.py             # Load architecture docs into Pinecone
+│   ├── arch_loader.py             # Load architecture docs into Pinecone
+│   └── chunker.py                 # Document chunking utility
 ├── evaluate/                  # Evaluation framework
 │   ├── evaluate_tagging.py        # Tagging agent evaluation
 │   └── generate_eval_dataset.py   # Synthetic dataset generation
@@ -263,7 +273,7 @@ openai:
 │   └── ...
 ├── app.py                     # FastAPI application entry point (335 lines, -43% reduction)
 ├── supervisor.py              # Supervisor agent orchestration
-├── chunker.py                 # Document chunking utility
+
 ├── config.poc.yaml            # System configuration
 ├── requirements.txt           # Python dependencies
 └── README.md                  # This file
@@ -329,15 +339,16 @@ Two workflow implementations provide flexibility:
 
 #### New: Combined Retrieval + Generation Tool
 
-- Tool name: generate_backlog_with_retrieval
-- Purpose: Performs retrieval and backlog generation in a single tool call and returns only the generation result (retrieval payload is not returned), reducing conversation history size
+- Tool name: `retrieval_backlog_tool` (function: `generate_backlog_with_retrieval`)
+- Purpose: Performs retrieval and backlog generation in a single tool call and returns only the generation result (retrieval payload is not returned), reducing conversation history size.
 - Typical usage: Provide a segment_id (read from runs/<run_id>/segments.jsonl) and optional intent labels. The tool loads the segment, runs retrieval, then calls the backlog generator with the retrieved context.
 - When to use: Prefer this tool for most segment-based generation. Use generate_backlog when you explicitly want to generate directly from input text without RAG.
 
 ### Tagging & Classification
 
 1. Analyzes generated stories against existing backlog
-2. Performs similarity search to find related items
+1. Analyzes generated stories against existing backlog
+2. Performs similarity search to find related items (handles retrieval internally if not provided)
 3. Classifies each story as:
    - **gap**: Extends/enhances existing functionality
    - **conflict**: Contradicts/replaces existing items

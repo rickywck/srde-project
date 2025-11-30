@@ -5,8 +5,6 @@
 This simplified POC keeps the **same high-level architecture and flow** as the full plan, but:
 - Focuses on a **single project** and a **single environment**.
 - Reduces configuration surface (hard-coded defaults where reasonable).
-- Implements **minimal happy-path logic** first (no retries, no advanced ranking, no evaluation suite initially).
-- Keeps **Segmentation → Retrieval → Generation → Tagging → Optional ADO write** as the core pipeline.
 
 Primary goals for the POC:
 - Ingest existing ADO backlog + architecture constraints into a vector store.
@@ -78,6 +76,8 @@ graph TB
 
 ### 1.3 Data Flow
 
+
+
 1. User uploads document and provides instructions via chat interface
 2. Supervisor receives document and orchestrates processing
 3. Document is segmented with intent detection
@@ -99,7 +99,6 @@ Components (kept from full design, simplified behavior):
 - **Backlog Generation Agent:** LLM that takes one segment + retrieved context and outputs epics/features/stories.
 - **Tagging Agent:** LLM that takes one generated user story + retrieved existing stories and outputs a tag.
 - **Evaluation Agent:** LLM-as-a-judge that evaluates generated backlog quality across multiple dimensions.
-- **ADO Writer (optional for POC):** Simple script to create new items only (no modify/patch logic).s a tag.
 - **ADO Writer (optional for POC):** Simple script to create new items only (no modify/patch logic).
 
 Non-goals / out-of-scope for this POC:
@@ -130,7 +129,7 @@ Non-goals / out-of-scope for this POC:
 - CLI script `arch_loader.py`:
   - Inputs: `--project`, `--path` to folder of docs.
   - For each file, convert to text (support `.md`, `.docx`, `.pdf` using libraries like `python-docx` and `PyPDF2`).
-  - Smart chunking using `RecursiveTokenChunker` from `chunking_evaluation.chunking`:
+  - Smart chunking using `RecursiveTokenChunker` from `ingestion.chunker`:
     - `chunk_size = 1000` (character length, roughly 500 tokens).
     - `chunk_overlap = 200`.
     - `separators = ["\n\n", "\n", ".", "?", "!", " ", ""]` (optimized for semantic coherence).
@@ -219,7 +218,7 @@ The Supervisor Agent interprets these natural language instructions and orchestr
 ---
 ## 6. Per-Segment Retrieval & Generation (Simplified)
 
-The Supervisor invokes the **Retrieval Tool** for each segment before calling the Backlog Generation Agent.
+The Supervisor invokes the **Retrieval Backlog Tool** (combined retrieval + generation) for each segment.
 
 ### 6.1 Intent Embedding
 
@@ -227,23 +226,14 @@ For each segment:
 - Build an intent query string: `dominant_intent + ' ' + ' '.join(intent_labels)` plus the first ~300 characters of `raw_text`.
 - Call OpenAI embeddings (`text-embedding-3-small`) to get an intent vector.
 
-### 6.2 Retrieval Tool Invocation
+### 6.2 Retrieval & Generation (Combined Tool)
 
-The Supervisor invokes the Retrieval Tool with the intent vector. The tool queries Pinecone **twice**:
-- ADO items:
-  - Namespace = project.
-  - Filter: `doc_type='ado_backlog'` (or via separate index if simpler).
-  - `top_k = 5`.
-  - **Similarity threshold**: `min_similarity = 0.7` (configurable).
-  - Filter results to only include matches with `score >= min_similarity`.
-- Architecture constraints:
-  - Namespace = project.
-  - Filter: `doc_type='architecture'`.
-  - `top_k = 5`.
-  - **Similarity threshold**: `min_similarity = 0.7` (configurable).
-  - Filter results to only include matches with `score >= min_similarity`.
+The Supervisor invokes `generate_backlog_with_retrieval` (from `retrieval_backlog_tool`) which internally:
+1. Queries Pinecone for ADO items and architecture constraints (using `retrieval_tool` logic).
+2. Calls the Backlog Generation Agent with the retrieved context.
+3. Returns ONLY the generated backlog items (reducing conversation history).
 
-For POC, skip complex ranking; just use similarity score returned by Pinecone and apply the threshold filter to keep only relevant results.
+This combined approach is preferred over separate retrieval and generation steps to minimize token usage in the conversation history.
 
 ### 6.3 Prompt Assembly
 
@@ -285,14 +275,10 @@ Once all segments are processed and backlog items are generated:
 ### 7.2 Story Embedding & Retrieval
 
 For each story:
-- Build story text: `title + '\n' + description + '\n' + '\n'.join(acceptance_criteria)`.
-- Embed with `text-embedding-3-small`.
-- Query Pinecone for existing user stories:
-  - Namespace = project.
-  - Filter: `work_item_type='Story'` (or `User Story`, depending on loader).
-  - `top_k = 10`.
-  - **Similarity threshold**: `min_similarity = 0.7` (configurable).
-  - Filter results to only include matches with `score >= min_similarity`.
+- The Tagging Agent can now perform internal retrieval if similar stories are not provided.
+- It builds story text: `title + '\n' + description + '\n' + '\n'.join(acceptance_criteria)`.
+- Queries Pinecone for existing user stories (using `SimilarStoryRetriever` service).
+- Filters results to only include matches with `score >= min_similarity`.
 
 **Early exit optimization:**
 - If **all** retrieved stories fall below the threshold (i.e., no relevant matches found), automatically tag the story as `"new"` without calling the Tagging Agent LLM.
