@@ -4,15 +4,35 @@ Segmentation Agent - Specialized agent for document segmentation with intent det
 
 import os
 import json
-import yaml
 import logging
 from pathlib import Path
+from typing import List, Dict, Any
+from pydantic import BaseModel, ValidationError
 from strands import Agent, tool
+from strands.types.exceptions import StructuredOutputException
 from .prompt_loader import get_prompt_loader
 from .model_factory import ModelFactory
 
 # Module logger
 logger = logging.getLogger(__name__)
+
+
+class SegmentOut(BaseModel):
+    segment_id: int
+    segment_order: int
+    raw_text: str
+    intent_labels: List[str]
+    dominant_intent: str
+
+    class Config:
+        extra = "allow"
+
+
+class SegmentationResponseIn(BaseModel):
+    segments: List[SegmentOut]
+
+    class Config:
+        extra = "allow"
 
 
 def create_segmentation_agent(run_id: str):
@@ -28,61 +48,29 @@ def create_segmentation_agent(run_id: str):
     
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
-    prompt_config = prompt_loader.load_prompt("segmentation_agent")
+    prompt_loader.load_prompt("segmentation_agent")
     system_prompt = prompt_loader.get_system_prompt("segmentation_agent")
-    user_template = prompt_loader.get_user_prompt_template("segmentation_agent")
+    prompt_loader.get_user_prompt_template("segmentation_agent")
     prompt_params = prompt_loader.get_parameters("segmentation_agent") or {}
 
-    # Load app config via ModelFactory so model selection and params match backlog agent
-    config_path = "config.poc.yaml"
+    # Create a Strands OpenAIModel using factory helper (agent does not access config or API key directly)
     try:
-        _cfg = ModelFactory._load_config(config_path)
-        logger.debug("Loaded config for segmentation agent: %s", {k: v for k, v in (_cfg or {}).items()})
+        model = ModelFactory.create_openai_model_for_agent(agent_params=prompt_params)
+        model_name = getattr(model, "model_id", None) or ModelFactory.get_default_model_id()
+        logger.debug("Initialized Strands OpenAIModel for segmentation: %s", model_name)
     except Exception as e:
-        logger.exception("Error loading config via ModelFactory: %s", e)
-        _cfg = {}
+        logger.exception("Failed to create Strands OpenAIModel for segmentation: %s", e)
+        model = None
+        model_name = ModelFactory.get_default_model_id()
 
-    # Determine effective max tokens (priority: agent prompt params -> app config -> model default)
-    agent_max_tokens = prompt_params.get("max_completion_tokens") or prompt_params.get("max_tokens")
-    app_max_tokens = _cfg.get("openai", {}).get("max_tokens")
-    if agent_max_tokens is not None:
-        eff_max_tokens = int(agent_max_tokens)
-    elif app_max_tokens is not None:
-        eff_max_tokens = int(app_max_tokens)
-    else:
-        eff_max_tokens = None
-
-    model_params = {}
-    if eff_max_tokens is not None:
-        model_params["max_completion_tokens"] = eff_max_tokens
-
-    try:
-        model_descriptor = ModelFactory.create_openai_model(config_path=config_path, model_params=model_params)
-        model_name = getattr(model_descriptor, "model_id", None) or ModelFactory.get_default_model_id(config_path)
-        model_params_from_factory = getattr(model_descriptor, "params", None) or {}
-        logger.debug("Model descriptor from factory: model_name=%s params=%s", model_name, model_params_from_factory)
-    except Exception as e:
-        logger.exception("ModelFactory.create_openai_model failed, falling back to env/config defaults: %s", e)
-        model_name = ModelFactory.get_default_model_id(config_path)
-        model_params_from_factory = {}
-
-    # Import OpenAI lazily so tests without package can still import this module
-    OpenAI = None
-    try:
-        from openai import OpenAI as _OpenAI
-        OpenAI = _OpenAI
-        logger.debug("`openai` package available; OpenAI client can be created")
-    except ModuleNotFoundError:
-        logger.warning("`openai` package not installed; running in MOCK mode unless an alternative client is provided")
-
-    api_key = os.getenv("OPENAI_API_KEY")
-    openai_client = OpenAI(api_key=api_key) if (api_key and OpenAI is not None) else None
-
-    # Merge prompt params with any params from the model factory (factory wins)
-    params = dict(model_params_from_factory)
-    for k, v in (prompt_params or {}).items():
-        if k not in params:
-            params[k] = v
+    # Initialize Strands Agent
+    agent = None
+    if model is not None:
+        try:
+            agent = Agent(model=model, system_prompt=system_prompt)
+        except Exception as e:
+            logger.exception("Failed to initialize Strands Agent (segmentation): %s", e)
+            agent = None
     
     @tool
     def segment_document(document_text: str) -> str:
@@ -154,26 +142,25 @@ def create_segmentation_agent(run_id: str):
                     })
                 result = {"status": "success_mock", "segments": segments}
             else:
-                if not openai_client:
-                    raise ValueError("OpenAI client not initialized and mock mode not enabled. Set OPENAI_API_KEY or SEGMENTATION_AGENT_MOCK=1.")
-                # Call LLM for segmentation
-                # Normalize token parameter to Responses-style key; omit temperature to avoid 400s on newer models
-                max_comp = (
-                    params.get("max_completion_tokens")
-                    or params.get("max_output_tokens")
-                    or params.get("max_tokens")
-                    or 4000
-                )
-                response = openai_client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "user", "content": segmentation_prompt}],
-                    temperature=params.get("temperature", 0.7),
-                    max_tokens=eff_max_tokens,
-                    **({"response_format": {"type": params.get("response_format", "json_object")}} if params.get("response_format") else {})
-                )
-                # Parse response
-                result_text = response.choices[0].message.content
-                result = json.loads(result_text)
+                if agent is None:
+                    raise ValueError("Segmentation agent not initialized and mock mode not enabled. Set SEGMENTATION_AGENT_MOCK=1 to use mock.")
+                # Use Strands with Structured Output
+                try:
+                    agent_result = agent(
+                        segmentation_prompt,
+                        structured_output_model=SegmentationResponseIn,
+                    )
+                    validated: SegmentationResponseIn = agent_result.structured_output  # type: ignore[assignment]
+                    # Convert to plain dict for downstream compatibility
+                    result: Dict[str, Any] = {"segments": []}
+                    for seg in validated.segments:
+                        try:
+                            seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
+                        except Exception:
+                            seg_dict = dict(seg)
+                        result["segments"].append(seg_dict)
+                except (StructuredOutputException, ValidationError) as e:
+                    raise ValueError(f"Structured output failed: {e}")
             
             # Validate structure
             if "segments" not in result:
@@ -207,11 +194,11 @@ def create_segmentation_agent(run_id: str):
         except json.JSONDecodeError as e:
             error_msg = {
                 "status": "error",
-                "error": f"Failed to parse LLM response as JSON: {str(e)}",
+                "error": f"Failed to parse response as JSON: {str(e)}",
                 "run_id": run_id
             }
             return json.dumps(error_msg, indent=2)
-        
+
         except Exception as e:
             error_msg = {
                 "status": "error",
