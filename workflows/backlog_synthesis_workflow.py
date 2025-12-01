@@ -18,6 +18,7 @@ from agents.tagging_agent import create_tagging_agent
 from agents.evaluation_agent import create_evaluation_agent
 # Retrieval is performed by tools/agents; no SimilarStoryRetriever at orchestrator level
 
+from strands.multiagent import GraphBuilder
 
 class BacklogSynthesisWorkflow:
     """

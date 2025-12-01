@@ -6,6 +6,8 @@ from strands.models.openai import OpenAIModel
 
 # Module logger
 logger = logging.getLogger(__name__)
+# Single canonical fallback model id used when no override, env var, or config is present
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
 class ModelFactory:
     """
@@ -24,13 +26,13 @@ class ModelFactory:
                     data = yaml.safe_load(f) or {}
                     logger.debug("Loaded config from %s: %s", config_path, {k: v for k, v in (data or {}).items()})
                     return data
-            # File missing: return sensible default
+            # File missing: return sensible default using canonical fallback
             logger.debug("Config file %s not found, using defaults", config_path)
-            return {"openai": {"chat_model": "gpt-4.1-mini"}}
+            return {"openai": {"chat_model": DEFAULT_OPENAI_MODEL}}
         except Exception as e:
-            # Log exception and return a safe fallback config
+            # Log exception and return a safe fallback config using canonical fallback
             logger.exception("Failed to load config from %s: %s", config_path, e)
-            return {"openai": {"chat_model": "gpt-4.1-mini"}}
+            return {"openai": {"chat_model": DEFAULT_OPENAI_MODEL}}
 
     @staticmethod
     def get_default_model_id(config_path: str = "config.poc.yaml", model_id_override: Optional[str] = None) -> str:
@@ -40,12 +42,12 @@ class ModelFactory:
 
         Priority: override > env var > config default
         """
-        try:
-            cfg = ModelFactory._load_config(config_path)
-        except Exception:
-            cfg = {"openai": {"chat_model": "gpt-4o-mini"}}
-        default_model = cfg.get("openai", {}).get("chat_model", "gpt-4o-mini")
-        return model_id_override or os.getenv("OPENAI_CHAT_MODEL", default_model)
+        # _load_config always returns a config dict with a fallback model, so callers
+        # don't need to defensively catch exceptions here. Resolve priority: override
+        # > config default.
+        cfg = ModelFactory._load_config(config_path)
+        default_model = cfg.get("openai", {}).get("chat_model", DEFAULT_OPENAI_MODEL)
+        return model_id_override or default_model
 
     @staticmethod
     def create_openai_model(
@@ -65,18 +67,14 @@ class ModelFactory:
         Returns:
             Configured OpenAIModel instance.
         """
-        try:
-            cfg = ModelFactory._load_config(config_path)
-        except Exception as e:
-            # _load_config already logs, but be defensive here
-            logger.debug("_load_config raised exception, using empty config: %s", e)
-            cfg = {"openai": {"chat_model": "gpt-4.1-mini"}}
-        
-        # Determine model ID
-        # Priority: override > env var > config > default
-        default_model = cfg.get("openai", {}).get("chat_model", "gpt-4.1-mini")
-        model_id = model_id_override or os.getenv("OPENAI_CHAT_MODEL", default_model)
-        logger.debug("Selected model_id=%s (override=%s, env=%s, config_default=%s)", model_id, model_id_override, os.getenv("OPENAI_CHAT_MODEL"), default_model)
+        # _load_config handles file-not-found and parsing errors and returns a
+        # fallback config. Rely on that behavior rather than duplicating fallback
+        # logic here.
+        cfg = ModelFactory._load_config(config_path)
+
+        # Determine model ID using centralized logic in get_default_model_id
+        model_id = ModelFactory.get_default_model_id(config_path=config_path, model_id_override=model_id_override)
+        logger.debug("Selected model_id=%s (override=%s)", model_id, model_id_override)
         
         # Ensure API key is set (OpenAIModel likely reads this from env, but good to check)
         api_key_var = cfg.get("openai", {}).get("api_key_env_var", "OPENAI_API_KEY")
