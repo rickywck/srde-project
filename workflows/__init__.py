@@ -12,7 +12,5 @@ segment → retrieve → generate → tag → evaluate
 from .backlog_synthesis_workflow import BacklogSynthesisWorkflow
 
 __all__ = [
-    "BacklogSynthesisWorkflow",
-    "StrandsBacklogWorkflow",
-    "list_all_workflows"
+    "BacklogSynthesisWorkflow"
 ]
