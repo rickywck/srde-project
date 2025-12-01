@@ -18,11 +18,11 @@ openai:
 retrieval:
   ado:
     top_k: 5
-    min_similarity_threshold: 0.7
+    min_similarity_threshold: 0.6
   architecture:
     top_k: 5
-    min_simi7larity_threshold: 0.7
+    min_similarity_threshold: 0.6
   tagging:
-    min_similarity_threshold: 0.7
+    min_similarity_threshold: 0.6
 
 
