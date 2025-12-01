@@ -69,4 +69,4 @@ system_prompt: |
   - If you will not call a tool, simply return a normal assistant response (no `tool_call` object).
 
 parameters:
-  max_completion_tokens: 2000
+  max_completion_tokens: 5000

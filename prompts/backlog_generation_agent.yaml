@@ -83,7 +83,7 @@ user_prompt_template: |
   - Be specific and actionable - avoid vague descriptions
 
 parameters:
-  max_completion_tokens: 2000
+  max_completion_tokens: 5000
   response_format: json_object
   max_ado_in_prompt: 6
   max_arch_in_prompt: 6

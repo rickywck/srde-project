@@ -92,5 +92,5 @@ user_prompt_template: |
   Return ONLY the JSON object with the "segments" array – no commentary.
 
 parameters:
-    max_completion_tokens: 4000
+    max_completion_tokens: 5000
     response_format: json_object
