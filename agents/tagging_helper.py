@@ -197,7 +197,11 @@ class TaggingInputResolver:
                 t = (i.get("type") or i.get("work_item_type") or "").lower()
                 return t in USER_STORY_TYPES
 
-            segment_id = (payload.get("segment_id") or (payload.get("story") or {}).get("segment_id"))
+            # payload.get('story') may be a string (path) or a dict; guard accordingly
+            story_field = payload.get("story")
+            segment_id = payload.get("segment_id")
+            if segment_id is None and isinstance(story_field, dict):
+                segment_id = story_field.get("segment_id")
             stories = [i for i in rows if _is_user_story(i)]
             if segment_id is not None:
                 try:
