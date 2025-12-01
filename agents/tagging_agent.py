@@ -45,7 +45,7 @@ from strands import Agent, tool
 from .prompt_loader import get_prompt_loader
 from services.similar_story_retriever import SimilarStoryRetriever
 from .model_factory import ModelFactory
-from .tagging_helper import TaggingInputResolver
+from .tagging_helper import TaggingInputResolver, _rule_based_fallback, finalize_tagging_result
 import logging
 from pydantic import BaseModel, Field, ValidationError
 from strands.types.exceptions import StructuredOutputException
@@ -69,25 +69,7 @@ class TaggingDecisionOut(BaseModel):
         extra = "allow"
 
 
-def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], threshold: float) -> Dict[str, Any]:
-    """Apply simple deterministic rules if LLM JSON invalid."""
-    if not similar:
-        return {"decision_tag": "new", "related_ids": [], "reason": "No similar items"}
-    # Consider only items above threshold
-    considered = [s for s in similar if s.get("similarity", 0.0) >= threshold]
-    if not considered:
-        return {"decision_tag": "new", "related_ids": [], "reason": "None above similarity threshold"}
-    # Duplication: highest similarity > 0.85 and title overlap > 70%
-    top = max(considered, key=lambda s: s.get("similarity", 0.0))
-    def _norm(t: str) -> List[str]:
-        return [w for w in re.split(r"\W+", t.lower()) if w]
-    story_title_tokens = set(_norm(story.get("title", "")))
-    top_title_tokens = set(_norm(top.get("title", "")))
-    overlap_ratio = len(story_title_tokens & top_title_tokens) / (len(story_title_tokens) or 1)
-    if top.get("similarity", 0.0) > 0.85 and overlap_ratio >= 0.7:
-        return {"decision_tag": "conflict", "related_ids": [top.get("work_item_id")], "reason": "High duplication signal"}
-    # Otherwise treat as gap if at least one considered
-    return {"decision_tag": "gap", "related_ids": [c.get("work_item_id") for c in considered[:3]], "reason": "Partial overlap suggests extension"}
+
 
 
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
@@ -252,7 +234,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "similar_count": 0,
                     "model_used": model_id
                 }
-                _finalize(result, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
                 return result
 
             # Build prompt for LLM using template
@@ -289,7 +271,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": True
                 }
-                _finalize(result, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
                 return result
 
             try:
@@ -316,7 +298,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": False
                 }
-                _finalize(result, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
                 return result
             except (StructuredOutputException, ValidationError) as e:
                 logger.warning("Tagging Agent: Structured output failed, using rule-based fallback. Reason: %s", e)
@@ -333,7 +315,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": True
                 }
-                _finalize(result, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
                 return result
             except Exception as e:
                 logger.exception("Tagging Agent: Agent invocation failed, using rule-based fallback: %s", e)

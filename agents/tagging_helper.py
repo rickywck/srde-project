@@ -15,13 +15,82 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
 logger = logging.getLogger(__name__)
 
 GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
 USER_STORY_TYPES = {"user story", "story", "user_story"}
+
+
+def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], threshold: float) -> Dict[str, Any]:
+    """Apply simple deterministic rules if LLM JSON invalid.
+
+    This was previously defined inside `tagging_agent.py`. Moving it here
+    centralizes tagging helpers and allows reuse from other modules.
+    """
+    if not similar:
+        return {"decision_tag": "new", "related_ids": [], "reason": "No similar items"}
+    # Consider only items above threshold
+    considered = [s for s in similar if s.get("similarity", 0.0) >= threshold]
+    if not considered:
+        return {"decision_tag": "new", "related_ids": [], "reason": "None above similarity threshold"}
+    # Duplication: highest similarity > 0.85 and title overlap > 70%
+    top = max(considered, key=lambda s: s.get("similarity", 0.0))
+    def _norm(t: str) -> List[str]:
+        return [w for w in re.split(r"\W+", t.lower()) if w]
+    story_title_tokens = set(_norm(story.get("title", "")))
+    top_title_tokens = set(_norm(top.get("title", "")))
+    overlap_ratio = len(story_title_tokens & top_title_tokens) / (len(story_title_tokens) or 1)
+    if top.get("similarity", 0.0) > 0.85 and overlap_ratio >= 0.7:
+        return {"decision_tag": "conflict", "related_ids": [top.get("work_item_id")], "reason": "High duplication signal"}
+    # Otherwise treat as gap if at least one considered
+    return {"decision_tag": "gap", "related_ids": [c.get("work_item_id") for c in considered[:3]], "reason": "Partial overlap suggests extension"}
+
+
+def finalize_tagging_result(
+    result: Dict[str, Any],
+    out_dir: Path,
+    processed_keys: set,
+    internal_id: Any = None,
+    title: str = None,
+) -> None:
+    """Persist a tagging `result` to `out_dir/tagging.jsonl` and update the
+    `processed_keys` de-duplication set.
+
+    Behaviour mirrors the previous `_finalize` closure in `tagging_agent.py`:
+    - Attaches `story_internal_id` and `story_title` to `result` when provided.
+    - Builds a key from `internal_id` or `title` and skips writing if already seen.
+    - Appends the JSON line to `tagging.jsonl`, attempts to flush/fsync for
+      durability, and adds the key to `processed_keys` on success.
+    - Swallows filesystem errors to avoid failing the overall tagging flow.
+    """
+    if internal_id:
+        result["story_internal_id"] = internal_id
+    if title:
+        result["story_title"] = title
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        tag_file = out_dir / "tagging.jsonl"
+        key = None
+        try:
+            key = str(internal_id) if internal_id is not None else (str(title) if title is not None else None)
+        except Exception:
+            key = None
+        if key is not None and key in processed_keys:
+            return
+        with open(tag_file, "a") as f:
+            f.write(json.dumps(result) + "\n")
+            try:
+                f.flush()
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        if key is not None:
+            processed_keys.add(key)
+    except Exception:
+        pass
 
 
 class TaggingInputResolver:
@@ -31,6 +100,13 @@ class TaggingInputResolver:
         default_threshold: float,
         generated_filename: str = GENERATED_BACKLOG_FILENAME,
     ) -> None:
+        """Initialize the resolver.
+
+        Args:
+            default_run_id: fallback run id used when none is provided.
+            default_threshold: default similarity threshold.
+            generated_filename: name of the generated backlog file to look for.
+        """
         self.default_run_id = default_run_id
         self.default_threshold = float(default_threshold)
         self.generated_filename = generated_filename
@@ -45,6 +121,17 @@ class TaggingInputResolver:
         backlog_path: Optional[str] = None,
         segment_id: Optional[int] = None,
     ) -> Dict[str, Any]:
+        """Normalize inputs for the tagging agent.
+
+        This method accepts several convenient input shapes (raw JSON string,
+        dicts, explicit backlog paths, or run ids) and returns a normalized
+        payload containing:
+            - `stories`: list of story dicts to tag
+            - `out_dir`: Path where outputs should be written
+            - `run_id`: effective run id
+            - `similar_existing_existing_stories`: any pre-supplied similar stories
+            - `threshold`: effective similarity threshold
+        """
         # Normalize incoming payload
         payload: Dict[str, Any] = {}
         if story_data is not None and story is None and similar_existing_stories is None and backlog_path is None:
@@ -140,6 +227,11 @@ class TaggingInputResolver:
         }
 
     def _looks_like_filesystem_path(self, v: Any) -> bool:
+        """Return True if `v` resembles a filesystem path or filename.
+
+        Heuristics consider `.json`, `.jsonl` extensions or the presence of
+        path separators.
+        """
         try:
             if not v or not isinstance(v, str):
                 return False
@@ -153,6 +245,12 @@ class TaggingInputResolver:
             return False
 
     def _resolve_io_context(self, run_id: str, candidate: str) -> Tuple[Path, Path]:
+        """Determine the output directory and backlog file path for a given
+        `candidate` string which may be a file, directory, or run-relative path.
+
+        Returns a tuple `(out_dir, backlog_path)` where `backlog_path` points to
+        the file to be read (often `generated_backlog.jsonl`).
+        """
         out_dir_local = Path(f"runs/{run_id}")
         backlog_path_local = out_dir_local / self.generated_filename
         try:
@@ -180,6 +278,15 @@ class TaggingInputResolver:
         return out_dir_local, backlog_path_local
 
     def _load_stories_from_backlog(self, backlog_file: Path, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Load and normalize user stories from a backlog JSONL file.
+
+        Reads the provided `backlog_file`, filters to user-story work items,
+        optionally filters by `segment_id` (if present in `payload`), and
+        normalizes fields to a predictable dict shape:
+            {"title","description","acceptance_criteria","internal_id"}
+
+        Returns an empty list on errors or when the file is not found.
+        """
         try:
             if not backlog_file.exists():
                 logger.warning("TaggingInputResolver: Backlog file not found: %s", backlog_file)
@@ -238,6 +345,10 @@ class TaggingInputResolver:
             return []
 
     def _looks_like_story_dict(self, obj: Dict[str, Any]) -> bool:
+        """Heuristic to determine whether `obj` resembles a story dict.
+
+        Returns True if keys associated with user stories are present.
+        """
         try:
             if not isinstance(obj, dict):
                 return False
