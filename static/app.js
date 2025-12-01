@@ -670,20 +670,32 @@ function sendQuickMessage(message) {
 function addMessage(role, content) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${role}`;
-    
+
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    
-    // Use innerHTML for system messages to render HTML formatting, textContent for others for security
-    if (role === 'system') {
-        contentDiv.innerHTML = content;
+
+    // Metadata (role + timestamp)
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'message-meta';
+    const roleLabel = (role === 'user') ? 'You' : (role === 'assistant') ? 'Assistant' : 'System';
+    metaDiv.textContent = `${roleLabel} • ${new Date().toLocaleString()}`;
+
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'message-body';
+
+    // Render HTML for system messages or if content looks like HTML; otherwise use textContent
+    const looksLikeHtml = typeof content === 'string' && /</.test(content);
+    if (role === 'system' || looksLikeHtml) {
+        bodyDiv.innerHTML = content;
     } else {
-        contentDiv.textContent = content;
+        bodyDiv.textContent = content;
     }
-    
+
+    contentDiv.appendChild(metaDiv);
+    contentDiv.appendChild(bodyDiv);
     messageDiv.appendChild(contentDiv);
     chatMessages.appendChild(messageDiv);
-    
+
     // Scroll to bottom
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -734,7 +746,9 @@ async function loadBacklog() {
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
             let html = `<div style="font-weight:600;margin-bottom:4px;">📋 Generated Backlog (${data.count} items)</div>`;
-            html += '<table style="border-collapse:collapse;width:100%;font-size:12px;">';
+            // Use colgroup with larger AC column (last) and balanced title/description widths
+            html += '<table style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">';
+            html += '<colgroup><col style="width:5%"><col style="width:8%"><col style="width:20%"><col style="width:35%"><col style="width:7%"><col style="width:25%"></colgroup>';
             html += '<thead><tr>' +
                 '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">#</th>' +
                 '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Type</th>' +
@@ -754,14 +768,12 @@ async function loadBacklog() {
                     `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;font-weight:500;">${item.title || ''}</td>` +
                     `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;" title="${fullDesc.replace(/"/g,'&quot;')}">${desc}</td>` +
                     `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${item.parent_reference || '-'}</td>` +
-                    `<td style="border:1px solid #ddd;padding:4px;vertical-align:top;">${acs || '-'}</td>` +
+                    `<td class="ac-cell" style="border:1px solid #ddd;padding:4px;vertical-align:top;">${acs || '-'}</td>` +
                     '</tr>';
             }
             html += '</tbody></table>';
-            contentDiv.innerHTML = html;
-            messageDiv.appendChild(contentDiv);
-            chatMessages.appendChild(messageDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            // Render as assistant message (addMessage will include metadata)
+            addMessage('assistant', html);
         }
         
     } catch (error) {
@@ -804,7 +816,8 @@ async function loadTagging() {
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
             let html = `<div style="font-weight:600;margin-bottom:4px;">🏷️ Tagging Results (${data.count} stories)</div>`;
-            html += '<table style="border-collapse:collapse;width:100%;font-size:12px;">';
+            html += '<table style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">';
+            html += '<colgroup><col style="width:5%"><col style="width:35%"><col style="width:12%"><col style="width:35%"><col style="width:6%"><col style="width:7%"></colgroup>';
             html += '<thead><tr>' +
                 '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">#</th>' +
                 '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Story Title</th>' +
@@ -835,10 +848,8 @@ async function loadTagging() {
                     '</tr>';
             }
             html += '</tbody></table>';
-            contentDiv.innerHTML = html;
-            messageDiv.appendChild(contentDiv);
-            chatMessages.appendChild(messageDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            // Render as assistant message (addMessage will include metadata)
+            addMessage('assistant', html);
         }
         
     } catch (error) {
@@ -1021,7 +1032,8 @@ async function evaluateQuality() {
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
         let html = '<div style="font-weight:600;margin-bottom:4px;">📊 Quality Evaluation</div>';
-        html += '<table class="evaluation-table" style="border-collapse:collapse;width:100%;font-size:12px;">';
+        html += '<table class="evaluation-table" style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">';
+        html += '<colgroup><col style="width:30%"><col style="width:20%"><col style="width:50%"></colgroup>';
         html += '<thead><tr>' +
             '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Metric</th>' +
             '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Score</th>' +
@@ -1044,10 +1056,8 @@ async function evaluateQuality() {
             html += `<tr><td style="border:1px solid #ddd;padding:4px;">Summary</td><td style="border:1px solid #ddd;padding:4px;">-</td><td style="border:1px solid #ddd;padding:4px;">${ev.summary}</td></tr>`;
         }
         html += '</tbody></table>';
-        contentDiv.innerHTML = html;
-        messageDiv.appendChild(contentDiv);
-        chatMessages.appendChild(messageDiv);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        // Render as assistant message (addMessage will include metadata)
+        addMessage('assistant', html);
     } catch (error) {
         console.error('Evaluation error:', error);
         addMessage('system', `❌ Evaluation failed: ${error.message}`);

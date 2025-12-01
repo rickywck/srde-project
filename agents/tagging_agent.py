@@ -45,7 +45,7 @@ from strands import Agent, tool
 from .prompt_loader import get_prompt_loader
 from services.similar_story_retriever import SimilarStoryRetriever
 from .model_factory import ModelFactory
-from .tagging_input_resolver import TaggingInputResolver
+from .tagging_helper import TaggingInputResolver
 import logging
 from pydantic import BaseModel, Field, ValidationError
 from strands.types.exceptions import StructuredOutputException
