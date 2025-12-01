@@ -75,7 +75,7 @@ class TaggingDecisionOut(BaseModel):
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
 
 
-def create_tagging_agent(run_id: str, default_similarity_threshold: float = None):
+def create_tagging_agent(run_id: str):
     """Create a tagging agent tool for a specific run."""
 
     # Load prompts from external configuration
@@ -83,9 +83,8 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     system_prompt = prompt_loader.get_system_prompt("tagging_agent")
     params = prompt_loader.get_parameters("tagging_agent") or {}
 
-    # Similarity threshold from params unless caller overrides
-    if default_similarity_threshold is None:
-        default_similarity_threshold = float(params.get("min_similarity_threshold", 0.5))
+    # Similarity threshold from params
+    default_similarity_threshold = float(params.get("min_similarity_threshold", 0.5))
 
     # Build model via ModelFactory helper; no direct config or API key access here
     try:
@@ -158,32 +157,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         except Exception:
             processed_story_keys = set()
 
-        def _finalize(result: Dict[str, Any], internal_id: Any = None, title: str = None) -> None:
-            if internal_id:
-                result["story_internal_id"] = internal_id
-            if title:
-                result["story_title"] = title
-            try:
-                current_out_dir.mkdir(parents=True, exist_ok=True)
-                tag_file = current_out_dir / "tagging.jsonl"
-                key = None
-                try:
-                    key = str(internal_id) if internal_id is not None else (str(title) if title is not None else None)
-                except Exception:
-                    key = None
-                if key is not None and key in processed_story_keys:
-                    return
-                with open(tag_file, "a") as f:
-                    f.write(json.dumps(result) + "\n")
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                    except Exception:
-                        pass
-                if key is not None:
-                    processed_story_keys.add(key)
-            except Exception:
-                pass
+        # Finalize/persist behavior moved to `finalize_tagging_result` in tagging_helper
 
         stories: List[Dict[str, Any]] = resolved.get("stories") or []
         effective_run_id: str = resolved.get("run_id") or run_id
@@ -332,7 +306,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": True
                 }
-                _finalize(result, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
                 return result
 
         # Process stories (single normally; multiple only when path provided)
