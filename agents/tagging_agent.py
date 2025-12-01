@@ -9,10 +9,7 @@ filesystem path) in the `story` field. The agent accepts these shapes:
 1) Single story (recommended):
      {"story": {"title": "...", "description": "...", "acceptance_criteria": ["..."]}}
 
-2) Multiple stories (batch):
-     {"stories": [ {"title":..., "description":...}, {...} ]}
-
-3) Reference a run/backlog file (fallback):
+2) Reference a run/backlog file (fallback):
      {"run_id": "<run-id>"}
      or
      {"backlog_path": "runs/<run-id>/generated_backlog.jsonl"}
