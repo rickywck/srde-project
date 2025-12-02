@@ -16,7 +16,6 @@ from agents.segmentation_agent import create_segmentation_agent
 from agents.backlog_generation_agent import create_backlog_generation_agent
 from agents.tagging_agent import create_tagging_agent
 from agents.evaluation_agent import create_evaluation_agent
-# Retrieval is performed by tools/agents; no SimilarStoryRetriever at orchestrator level
 
 from strands.multiagent import GraphBuilder
 
@@ -37,7 +36,6 @@ class BacklogSynthesisWorkflow:
         self.run_dir = run_dir
         self.config = config or self._load_config()
         # Orchestrator configuration (provider-agnostic)
-        self.min_similarity = self.config.get("retrieval", {}).get("tagging", {}).get("min_similarity_threshold", 0.5)
         
         # Workflow state
         self.results = {
@@ -217,8 +215,7 @@ class BacklogSynthesisWorkflow:
                     "internal_id": s.get("internal_id"),
                 },
                 # Leave similar empty to let the agent perform internal retrieval
-                "similar_existing_stories": [],
-                "similarity_threshold": self.min_similarity,
+                "similar_existing_stories": []
             }
             try:
                 res = json.loads(tagging_tool(json.dumps(payload)))

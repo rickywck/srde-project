@@ -13,9 +13,14 @@ BacklogSynthesisWorkflow._find_similar_stories.
 
 from typing import Any, Dict, List, Optional, Callable
 import os
+import logging
+import yaml
 
 from openai import OpenAI
 from pinecone import Pinecone
+
+# Module logger for debug/troubleshooting
+logger = logging.getLogger(__name__)
 
 
 class SimilarStoryRetriever:
@@ -25,12 +30,19 @@ class SimilarStoryRetriever:
         min_similarity: float = 0.5,
         log_fn: Optional[Callable[[str], None]] = None,
     ) -> None:
-        self.config = config or {}
+        #self.config = config or {}
         self.min_similarity = float(min_similarity)
         self._openai_client: Optional[OpenAI] = None
         self._pinecone_client: Optional[Pinecone] = None
         self._index = None
         self.log_fn = log_fn
+
+        # Load configuration
+        config_path = "config.poc.yaml"
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+        self.config = config or {}
 
         # Configuration
         self.embedding_model = (
@@ -41,6 +53,12 @@ class SimilarStoryRetriever:
         )
         self.index_name = self.config.get("pinecone", {}).get("index_name", "rde-lab")
         self.pinecone_namespace = (self.config.get("pinecone", {}).get("project") or "").strip()
+        logger.debug("SimilarStoryRetriever: Initialized with index_name=%s, namespace=%s, embedding_model=%s, embedding_dimensions=%s, min_similarity=%s",
+                     self.index_name,
+                     self.pinecone_namespace,
+                     self.embedding_model,
+                     self.embedding_dimensions,
+                     self.min_similarity)
 
     # ---- Lazy clients
     @property
@@ -62,18 +80,26 @@ class SimilarStoryRetriever:
         return self._index
 
     # ---- Public API
-    def find_similar_stories(
-        self, story: Dict[str, Any], min_similarity: Optional[float] = None
-    ) -> List[Dict[str, Any]]:
+    def find_similar_stories(self, story: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Find similar existing stories using vector similarity search.
+
+        Uses the `min_similarity` configured when the retriever was instantiated.
 
         Returns a list of dicts:
         [{work_item_id, title, description, similarity}, ...]
         """
-        sim_threshold = float(min_similarity) if min_similarity is not None else self.min_similarity
+        sim_threshold = float(self.min_similarity)
+
+        logger.debug("SimilarStoryRetriever: find_similar_stories called for title=%s threshold=%s", story.get("title"), sim_threshold)
 
         if not self.openai_client or not self.index:
-            self._log("SimilarStoryRetriever: Missing OpenAI or Pinecone client, returning empty list")
+            logger.debug("SimilarStoryRetriever: Missing OpenAI or Pinecone client, returning empty list")
+            # still attempt to call user-provided log function if present
+            try:
+                if self.log_fn:
+                    self.log_fn("Missing OpenAI or Pinecone client, returning empty list")
+            except Exception:
+                pass
             return []
 
         # Build story text for embedding
@@ -106,11 +132,13 @@ class SimilarStoryRetriever:
                 query_kwargs["namespace"] = self.pinecone_namespace
 
             query_res = self.index.query(**query_kwargs)
+            logger.debug("SimilarStoryRetriever: Pinecone query returned %s matches", len(query_res.get("matches", [])))            
 
             # Filter by similarity threshold and work item type
             similar_stories: List[Dict[str, Any]] = []
             for match in query_res.get("matches", []):
                 score = match.get("score", 0)
+                logger.debug("SimilarStoryRetriever: Match score=%s for id=%s", score, match.get("id")) 
                 if score >= sim_threshold:
                     md = match.get("metadata", {})
                     item_type = (md.get("type") or md.get("work_item_type") or "").lower()
@@ -127,16 +155,29 @@ class SimilarStoryRetriever:
             return similar_stories
 
         except Exception as e:
-            self._log(f"SimilarStoryRetriever: Retrieval failed: {e}")
+            logger.exception("SimilarStoryRetriever: Retrieval failed")
+            try:
+                if self.log_fn:
+                    self.log_fn(f"Retrieval failed: {e}")
+            except Exception:
+                pass
             return []
 
     # ---- Helpers
     def _log(self, message: str) -> None:
+        """Backward-compatible helper that prefers a logger and also calls an
+        optional provided log function. Kept for external callers that may
+        have used this previously.
+        """
         try:
+            # Primary: module logger
+            logger.debug(message)
+            # Secondary: user-provided logging callback
             if self.log_fn:
-                self.log_fn(message)
-            else:
-                # Best-effort logging without raising
-                print(message)
+                try:
+                    self.log_fn(message)
+                except Exception:
+                    logger.debug("SimilarStoryRetriever: user log_fn raised an exception")
         except Exception:
+            # Never raise from logging
             pass

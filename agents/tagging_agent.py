@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 # Constants
 GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
 USER_STORY_TYPES = {"user story", "story", "user_story"}
+DEFAULT_MIN_SIMILARITY_THRESHOLD = 0.5
 
 # Note: System prompt now loaded from prompts/tagging_agent.yaml
 
@@ -67,9 +68,6 @@ class TaggingDecisionOut(BaseModel):
 
     class Config:
         extra = "allow"
-
-
-
 
 
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
@@ -84,7 +82,7 @@ def create_tagging_agent(run_id: str):
     params = prompt_loader.get_parameters("tagging_agent") or {}
 
     # Similarity threshold from params
-    default_similarity_threshold = float(params.get("min_similarity_threshold", 0.5))
+    similarity_threshold = float(params.get("min_similarity_threshold", DEFAULT_MIN_SIMILARITY_THRESHOLD))
 
     # Build model via ModelFactory helper; no direct config or API key access here
     try:
@@ -101,7 +99,6 @@ def create_tagging_agent(run_id: str):
         story_data: Any = None,
         story: Dict[str, Any] = None,
         similar_existing_stories: List[Dict[str, Any]] = None,
-        similarity_threshold: float = None,
         run_id_override: str = None,
         backlog_path: str = None,
     ) -> str:
@@ -112,7 +109,7 @@ def create_tagging_agent(run_id: str):
         """
 
         # Resolve input into normalized payload (single story or list if path)
-        resolver = TaggingInputResolver(default_run_id=run_id, default_threshold=default_similarity_threshold)
+        resolver = TaggingInputResolver(default_run_id=run_id, default_threshold=similarity_threshold)
         try:
             resolved = resolver.resolve(
                 story_data=story_data,
@@ -130,7 +127,7 @@ def create_tagging_agent(run_id: str):
                 "related_ids": [],
                 "reason": f"Invalid input: {e}",
                 "early_exit": True,
-                "similarity_threshold": default_similarity_threshold,
+                "similarity_threshold": similarity_threshold,
                 "similar_count": 0,
                 "model_used": model_id
             })
@@ -161,13 +158,23 @@ def create_tagging_agent(run_id: str):
 
         stories: List[Dict[str, Any]] = resolved.get("stories") or []
         effective_run_id: str = resolved.get("run_id") or run_id
-        default_threshold_local: float = float(resolved.get("threshold", default_similarity_threshold))
+        #default_threshold_local: float = float(resolved.get("threshold", default_similarity_threshold))
         global_similar: List[Dict[str, Any]] = resolved.get("similar_existing_stories") or []
 
         def _tag_one(story_obj: Dict[str, Any]) -> Dict[str, Any]:
             internal_id = story_obj.get("internal_id")
             title = story_obj.get("title")
-            threshold = default_threshold_local
+            #threshold = default_threshold_local
+            # Debug: show the similarity threshold used for tagging this story
+            try:
+                logger.debug(
+                    "Tagging Agent: Using similarity threshold=%.4f for story internal_id=%s title=%s",
+                    float(similarity_threshold),
+                    internal_id,
+                    title,
+                )
+            except Exception:
+                logger.debug("Tagging Agent: Using similarity threshold (could not format values): %s", str(similarity_threshold))
             similar_local = list(global_similar) if isinstance(global_similar, list) else []
 
             # Log payload
@@ -182,20 +189,40 @@ def create_tagging_agent(run_id: str):
             if not similar_local:
                 try:
                     logger.info("Tagging Agent: No similar stories provided; performing internal retrieval…")
-                    retriever = SimilarStoryRetriever(config=None, min_similarity=threshold)
+                    retriever = SimilarStoryRetriever(config=None, min_similarity=similarity_threshold)
                     similar_local = retriever.find_similar_stories(
                         {
                             "title": story_obj.get("title", ""),
                             "description": story_obj.get("description", ""),
                             "acceptance_criteria": story_obj.get("acceptance_criteria", []),
-                        },
-                        min_similarity=threshold,
+                        }
                     )
                     logger.info("Tagging Agent: Internal retrieval found %s similar stories", len(similar_local or []))
+                    # Debug: list retrieved stories and their similarity scores
+                    try:
+                        logger.debug("Tagging Agent: Retrieved similar stories (id | similarity | title):")
+                        for s in (similar_local or []):
+                            sid = s.get("work_item_id") if isinstance(s, dict) else None
+                            sim = float(s.get("similarity", 0.0)) if isinstance(s, dict) else 0.0
+                            stitle = (s.get("title") or "")[:200] if isinstance(s, dict) else str(s)
+                            logger.debug(" - %s | %.4f | %s", sid, sim, stitle)
+                    except Exception:
+                        logger.debug("Tagging Agent: Could not enumerate retrieved similar stories for debug output")
                 except Exception as e:
                     logger.exception("Tagging Agent: Internal retrieval failed: %s", e)
+            else:
+                # Debug: similar stories were supplied in input, list them
+                try:
+                    logger.debug("Tagging Agent: Using provided similar stories (count=%d):", len(similar_local))
+                    for s in similar_local:
+                        sid = s.get("work_item_id") if isinstance(s, dict) else None
+                        sim = float(s.get("similarity", 0.0)) if isinstance(s, dict) else 0.0
+                        stitle = (s.get("title") or "")[:200] if isinstance(s, dict) else str(s)
+                        logger.debug(" - %s | %.4f | %s", sid, sim, stitle)
+                except Exception:
+                    logger.debug("Tagging Agent: Could not enumerate provided similar stories for debug output")
 
-            above_threshold = [s for s in (similar_local or []) if s.get("similarity", 0.0) >= threshold]
+            above_threshold = [s for s in (similar_local or []) if s.get("similarity", 0.0) >= similarity_threshold]
             if not above_threshold:
                 result = {
                     "status": "ok",
@@ -204,7 +231,7 @@ def create_tagging_agent(run_id: str):
                     "related_ids": [],
                     "reason": "No similar existing stories found (all below threshold)",
                     "early_exit": True,
-                    "similarity_threshold": threshold,
+                    "similarity_threshold": similarity_threshold,
                     "similar_count": 0,
                     "model_used": model_id
                 }
@@ -226,13 +253,13 @@ def create_tagging_agent(run_id: str):
                 story_title=story_obj.get("title"),
                 story_description=story_obj.get("description"),
                 story_acceptance_criteria=ac_text,
-                similarity_threshold=threshold,
+                similarity_threshold=similarity_threshold,
                 similar_stories_formatted=similar_formatted
             )
 
             if model is None:
                 logger.warning("Tagging Agent: No model available; using rule-based fallback")
-                fallback = _rule_based_fallback(story_obj, above_threshold, threshold)
+                fallback = _rule_based_fallback(story_obj, above_threshold, similarity_threshold)
                 result = {
                     "status": "ok",
                     "run_id": effective_run_id,
@@ -240,7 +267,7 @@ def create_tagging_agent(run_id: str):
                     "related_ids": fallback.get("related_ids", []),
                     "reason": fallback.get("reason", "Fallback applied"),
                     "early_exit": False,
-                    "similarity_threshold": threshold,
+                    "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
                     "fallback_used": True
@@ -267,7 +294,7 @@ def create_tagging_agent(run_id: str):
                     "related_ids": related_ids,
                     "reason": reason,
                     "early_exit": False,
-                    "similarity_threshold": threshold,
+                    "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
                     "fallback_used": False
@@ -276,7 +303,7 @@ def create_tagging_agent(run_id: str):
                 return result
             except (StructuredOutputException, ValidationError) as e:
                 logger.warning("Tagging Agent: Structured output failed, using rule-based fallback. Reason: %s", e)
-                fallback = _rule_based_fallback(story_obj, above_threshold, threshold)
+                fallback = _rule_based_fallback(story_obj, above_threshold, similarity_threshold)
                 result = {
                     "status": "ok",
                     "run_id": effective_run_id,
@@ -284,7 +311,7 @@ def create_tagging_agent(run_id: str):
                     "related_ids": fallback.get("related_ids", []),
                     "reason": fallback.get("reason", "Fallback applied"),
                     "early_exit": False,
-                    "similarity_threshold": threshold,
+                    "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
                     "fallback_used": True
@@ -293,7 +320,7 @@ def create_tagging_agent(run_id: str):
                 return result
             except Exception as e:
                 logger.exception("Tagging Agent: Agent invocation failed, using rule-based fallback: %s", e)
-                fallback = _rule_based_fallback(story_obj, above_threshold, threshold)
+                fallback = _rule_based_fallback(story_obj, above_threshold, similarity_threshold)
                 result = {
                     "status": "ok",
                     "run_id": effective_run_id,
@@ -301,7 +328,7 @@ def create_tagging_agent(run_id: str):
                     "related_ids": fallback.get("related_ids", []),
                     "reason": fallback.get("reason", "Fallback applied"),
                     "early_exit": False,
-                    "similarity_threshold": threshold,
+                    "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
                     "fallback_used": True

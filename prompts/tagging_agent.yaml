@@ -62,3 +62,4 @@ user_prompt_template: |
 parameters:
   # Use max_completion_tokens for OpenAI Responses API compatibility
   max_completion_tokens: 1000
+  min_similarity_threshold: 0.5

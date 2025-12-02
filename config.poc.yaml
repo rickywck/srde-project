@@ -22,7 +22,5 @@ retrieval:
   architecture:
     top_k: 5
     min_similarity_threshold: 0.6
-  tagging:
-    min_similarity_threshold: 0.6
 
 

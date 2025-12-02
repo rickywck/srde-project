@@ -167,9 +167,6 @@ def test_tagging_workflow_debug():
 
     cfg = _load_config(project_root)
     min_similarity = _get_threshold(cfg)
-    embedding_model = cfg.get("openai", {}).get("embedding_model", "text-embedding-3-small")
-    embedding_dimensions = int(cfg.get("openai", {}).get("embedding_dimensions", 512))
-    openai_client, index, namespace = _get_clients(cfg)
 
     backlog_items = _load_backlog_items(backlog_path)
     stories = [i for i in backlog_items if _is_user_story(i)]
@@ -183,17 +180,6 @@ def test_tagging_workflow_debug():
     stories = stories[:max_cases]
 
     for story in stories:
-        similar_stories = _retrieve_similar_for_story(
-            openai_client,
-            index,
-            namespace,
-            embedding_model,
-            embedding_dimensions,
-            min_similarity,
-            story,
-        )
-        _print_similar(story.get("title", "(untitled)"), similar_stories, float(min_similarity))
-
         payload = {
             "story": {
                 "title": story.get("title"),
@@ -201,7 +187,6 @@ def test_tagging_workflow_debug():
                 "acceptance_criteria": story.get("acceptance_criteria", []),
                 "internal_id": story.get("internal_id"),
             },
-            "similar_existing_stories": similar_stories,
             "similarity_threshold": float(min_similarity),
         }
 
