@@ -14,20 +14,30 @@
     "recall": 1.0,
     "f1": 1.0,
     "accuracy": 1.0,
-    "tp": 3,
+    "tp": 2,
     "fp": 0,
     "fn": 0,
-    "tn": 7
+    "tn": 8
+  },
+  "duplicate": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "accuracy": 1.0,
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 8
   },
   "conflict": {
     "precision": 1.0,
     "recall": 1.0,
     "f1": 1.0,
     "accuracy": 1.0,
-    "tp": 3,
+    "tp": 2,
     "fp": 0,
     "fn": 0,
-    "tn": 7
+    "tn": 8
   },
   "macro_f1": 1.0,
   "_gold_pred_pairs": []

@@ -2,9 +2,9 @@
 """Tagging Evaluation (Agent Invocation)
 
 Reads evaluation dataset records and invokes the actual tagging agent tool to
-produce a tag (new|gap|conflict) for each generated story relative to provided
-existing stories. Computes precision/recall/F1 metrics and writes per-record
-predictions + aggregate metrics.
+produce a tag (new|gap|duplicate|conflict) for each generated story relative to
+provided existing stories. Computes precision/recall/F1 metrics and writes
+per-record predictions + aggregate metrics.
 """
 
 import os
@@ -21,13 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.tagging_agent import create_tagging_agent
 
-DATASET_PATH = os.path.join("datasets", "eval_dataset.json")  # Accept .json or .jsonl
-EVAL_DIR = os.path.join("eval")
+DATASET_PATH = os.path.join("eval/datasets", "eval_dataset.jsonl")  # Accept .json or .jsonl
+EVAL_DIR = os.path.join("eval/results")
 PREDICTIONS_JSONL = os.path.join(EVAL_DIR, "tagging_predictions.jsonl")
 METRICS_JSON = os.path.join(EVAL_DIR, "tagging_f1.json")
 
 DEFAULT_THRESHOLD = 0.6
-TAG_VALUES = ["new", "gap", "conflict"]
+TAG_VALUES = ["new", "gap", "duplicate", "conflict"]
 
 
 @dataclass

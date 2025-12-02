@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Generate evaluation dataset for tagging (gap / new / conflict) using existing
-Azure DevOps User Stories as context.
+"""Generate evaluation dataset for tagging (gap / new / duplicate / conflict)
+using existing Azure DevOps User Stories as context.
 
-Output JSON structure:
-[
-    {
-        "story_title": str,
-        "story_description": str,
-        "story_acceptance_criteria": [str, ...],
-        "existing_stories": [{"title": str, "description": str, "acceptance_criteria": [str, ...]}],
-        "gold_tag": "gap"|"new"|"conflict",
-        "gold_related_ids": [title strings]
-    }, ...
-]
+Output format: JSONL (one JSON object per line), each object:
+{
+    "story_title": str,
+    "story_description": str,
+    "story_acceptance_criteria": [str, ...],
+    "existing_stories": [{"title": str, "description": str, "acceptance_criteria": [str, ...]}],
+    "gold_tag": "gap"|"new"|"duplicate"|"conflict",
+    "gold_related_ids": [title strings]
+}
 
 Tag heuristics (deterministic, no LLM calls):
  - gap: enhancement / extension of ONE existing story
+ - duplicate: already covered by the existing story with little to no gap
  - conflict: replacement / incompatible change of ONE existing story
  - new: unrelated new capability (no related IDs)
 
@@ -34,6 +33,59 @@ from typing import List, Dict, Any
 import requests
 import yaml
 from dotenv import load_dotenv
+
+# =============================
+# Prompt/Template Constants
+# =============================
+
+# Gap templates
+GAP_TITLE_TEMPLATE = "Enhance {base_title} with extended capability"
+GAP_DESC_TEMPLATE = (
+    "Extend '{base_title}' to cover additional scenarios and edge conditions, "
+    "improving robustness and observability in subtler ways than currently described."
+)
+GAP_ADDED_REQUIREMENTS = [
+    "Handles edge case input variations",
+    "Emits additional audit events for troubleshooting",
+    "Meets a modest performance target under load",
+]
+
+# Duplicate templates (minimal or no gap)
+DUPLICATE_TITLE_TEMPLATE = "Re-state {base_title} requirement"
+DUPLICATE_DESC_TEMPLATE = (
+    "Restate requirements closely aligned with '{base_title}', using slightly different phrasing "
+    "or examples but preserving the original scope and outcomes."
+)
+DUPLICATE_NOTES = [
+    "Clarifies existing acceptance details",
+    "Provides an alternate phrasing without added scope",
+]
+
+# Conflict templates
+CONFLICT_TITLE_TEMPLATE = "Replace {base_title} with revised approach"
+CONFLICT_DESC_TEMPLATE = (
+    "Propose an alternative approach to '{base_title}' that changes the expected workflow or "
+    "behaviour in ways that are not directly compatible with the existing item."
+)
+CONFLICT_ACCEPTANCE = [
+    "Defines alternative workflow and expected outcomes",
+    "Specifies behaviour differences compared to current approach",
+    "Includes notes on transition considerations",
+]
+
+# New templates
+NEW_NOUNS = [
+    "analytics dashboard",
+    "observability hub",
+    "bulk export tool",
+    "AI assistant",
+    "usage heatmap",
+]
+NEW_ACCEPTANCE = [
+    "Accessible via navigation",
+    "Data loads within 2s",
+    "Basic role-based access enforced",
+]
 
 
 def encode_pat(pat: str) -> str:
@@ -101,43 +153,30 @@ def synthesize_candidate(existing_list: List[Dict[str, Any]], tag: str, rng: ran
     # sanitize later to be defensive.
     base = existing_list[0]
     if tag == "gap":
-        story_title = f"Enhance {base['title']} with extended capability"
-        story_description = (
-            f"Add missing functionality building on '{base['title']}'. This fills a gap by "
-            "introducing advanced behavior not present in the current implementation."
-        )
-        added_requirements = [
-            "New: Extended edge case handling",
-            "New: Additional audit logging",
-            "New: Performance baseline metrics"
-        ]
-        story_acceptance = base["acceptance_criteria"][:2] + rng.sample(added_requirements, k=min(2, len(added_requirements)))
+        story_title = GAP_TITLE_TEMPLATE.format(base_title=base['title'])
+        story_description = GAP_DESC_TEMPLATE.format(base_title=base['title'])
+        story_acceptance = base["acceptance_criteria"][:2] + rng.sample(GAP_ADDED_REQUIREMENTS, k=min(2, len(GAP_ADDED_REQUIREMENTS)))
+        gold_related_ids = [base['title']]
+    elif tag == "duplicate":
+        story_title = DUPLICATE_TITLE_TEMPLATE.format(base_title=base['title'])
+        story_description = DUPLICATE_DESC_TEMPLATE.format(base_title=base['title'])
+        ac_base = base.get("acceptance_criteria", [])
+        extra_note = rng.choice(DUPLICATE_NOTES) if DUPLICATE_NOTES else "Clarify existing behavior only"
+        story_acceptance = (ac_base[:3] if isinstance(ac_base, list) else []) + [extra_note]
         gold_related_ids = [base['title']]
     elif tag == "conflict":
-        story_title = f"Replace {base['title']} with revised approach"
-        story_description = (
-            f"Deprecate existing behavior defined in '{base['title']}' and adopt a new incompatible "
-            "strategy improving security/compliance. Existing implementation will be removed."
-        )
-        story_acceptance = [
-            "Legacy behavior removed",
-            "New strategy implemented end-to-end",
-            "Migration notes documented"
-        ]
+        story_title = CONFLICT_TITLE_TEMPLATE.format(base_title=base['title'])
+        story_description = CONFLICT_DESC_TEMPLATE.format(base_title=base['title'])
+        story_acceptance = CONFLICT_ACCEPTANCE
         gold_related_ids = [base['title']]
     else:  # new
-        nouns = ["analytics dashboard", "observability hub", "bulk export tool", "AI assistant", "usage heatmap"]
-        chosen = rng.choice(nouns)
+        chosen = rng.choice(NEW_NOUNS)
         story_title = f"Implement {chosen}"
         story_description = (
-            f"Provide a {chosen} offering new capability unrelated to current backlog items." \
+            f"Provide a {chosen} offering new capability unrelated to current backlog items."
             " Users can access it from main navigation."
         )
-        story_acceptance = [
-            "Accessible via navigation",
-            "Data loads within 2s",
-            "Basic role-based access enforced"
-        ]
+        story_acceptance = NEW_ACCEPTANCE
         gold_related_ids = []
     return {
         "story_title": story_title,
@@ -149,7 +188,7 @@ def synthesize_candidate(existing_list: List[Dict[str, Any]], tag: str, rng: ran
     }
 
 
-def build_dataset(stories: List[Dict[str, Any]], sample_size: int, proportion_gap: float, proportion_conflict: float, seed: int) -> List[Dict[str, Any]]:
+def build_dataset(stories: List[Dict[str, Any]], sample_size: int, proportion_gap: float, proportion_duplicate: float, proportion_conflict: float, seed: int) -> List[Dict[str, Any]]:
     """Build dataset ensuring exactly one existing story per synthesized entry."""
     rng = random.Random(seed)
     simplified = [extract_story_fields(w) for w in stories]
@@ -159,14 +198,17 @@ def build_dataset(stories: List[Dict[str, Any]], sample_size: int, proportion_ga
     rng.shuffle(simplified)
     needed = sample_size
     gap_target = int(needed * proportion_gap)
+    duplicate_target = int(needed * proportion_duplicate)
     conflict_target = int(needed * proportion_conflict)
-    new_target = needed - gap_target - conflict_target
+    new_target = needed - gap_target - duplicate_target - conflict_target
     dataset: List[Dict[str, Any]] = []
     idx = 0
     def pick_single(i: int) -> List[Dict[str, Any]]:
         return [simplified[i % len(simplified)]]
     for _ in range(gap_target):
         dataset.append(synthesize_candidate(pick_single(idx), "gap", rng)); idx += 1
+    for _ in range(duplicate_target):
+        dataset.append(synthesize_candidate(pick_single(idx), "duplicate", rng)); idx += 1
     for _ in range(conflict_target):
         dataset.append(synthesize_candidate(pick_single(idx), "conflict", rng)); idx += 1
     for _ in range(new_target):
@@ -176,7 +218,7 @@ def build_dataset(stories: List[Dict[str, Any]], sample_size: int, proportion_ga
     for entry in dataset:
         if entry.get("existing_stories"):
             entry["existing_stories"] = entry["existing_stories"][:1]
-        if entry.get("gold_tag") in ("gap", "conflict"):
+        if entry.get("gold_tag") in ("gap", "duplicate", "conflict"):
             if entry["existing_stories"]:
                 entry["gold_related_ids"] = [entry["existing_stories"][0]["title"]]
             else:
@@ -196,10 +238,11 @@ def main():
     parser.add_argument("--config", default="config.poc.yaml", help="Path to config file")
     parser.add_argument("--organization", help="Override ADO organization")
     parser.add_argument("--project", help="Override ADO project")
-    parser.add_argument("--output", default="datasets/eval_dataset.json", help="Output JSON file path")
+    parser.add_argument("--output", default="eval/datasets/eval_dataset_generated.jsonl", help="Output JSONL file path (one JSON object per line)")
     parser.add_argument("--sample-size", type=int, default=10, help="Number of evaluation entries to generate (max 20)")
-    parser.add_argument("--gap", type=float, default=0.34, help="Proportion of gap examples")
-    parser.add_argument("--conflict", type=float, default=0.33, help="Proportion of conflict examples")
+    parser.add_argument("--gap", type=float, default=0.25, help="Proportion of gap examples")
+    parser.add_argument("--duplicate", type=float, default=0.25, help="Proportion of duplicate examples")
+    parser.add_argument("--conflict", type=float, default=0.25, help="Proportion of conflict examples")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     args = parser.parse_args()
 
@@ -208,8 +251,8 @@ def main():
         print(f"Requested sample size {args.sample_size} exceeds max {MAX_SAMPLE}; capping to {MAX_SAMPLE}.")
         args.sample_size = MAX_SAMPLE
 
-    if args.gap + args.conflict > 0.95:
-        print("Invalid proportions: gap + conflict must be <= 0.95")
+    if args.gap + args.duplicate + args.conflict > 0.95:
+        print("Invalid proportions: gap + duplicate + conflict must be <= 0.95")
         sys.exit(1)
 
     try:
@@ -242,7 +285,7 @@ def main():
         sys.exit(1)
 
     print(f"Fetched {len(user_stories)} user stories.")
-    dataset = build_dataset(user_stories, args.sample_size, args.gap, args.conflict, args.seed)
+    dataset = build_dataset(user_stories, args.sample_size, args.gap, args.duplicate, args.conflict, args.seed)
     if not dataset:
         print("No dataset generated (insufficient stories).")
         sys.exit(1)
@@ -251,15 +294,16 @@ def main():
     for entry in dataset:
         if entry.get("existing_stories"):
             entry["existing_stories"] = entry["existing_stories"][:1]
-        if entry.get("gold_tag") in ("gap", "conflict") and entry["existing_stories"]:
+        if entry.get("gold_tag") in ("gap", "duplicate", "conflict") and entry["existing_stories"]:
             entry["gold_related_ids"] = [entry["existing_stories"][0]["title"]]
         elif entry.get("gold_tag") == "new":
             entry["gold_related_ids"] = []
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, 'w') as f:
-        json.dump(dataset, f, indent=4)
-    print(f"Wrote evaluation dataset with {len(dataset)} entries to {args.output}")
+        for obj in dataset:
+            f.write(json.dumps(obj) + "\n")
+    print(f"Wrote JSONL evaluation dataset with {len(dataset)} entries to {args.output}")
 
 
 if __name__ == "__main__":
