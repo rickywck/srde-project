@@ -1,8 +1,8 @@
 import os
-import yaml
 import logging
 from typing import Dict, Any, Optional
 from strands.models.openai import OpenAIModel
+from .utils.config_loader import ConfigLoader
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -20,19 +20,17 @@ class ModelFactory:
 
     @staticmethod
     def _load_config(config_path: str) -> Dict[str, Any]:
-        try:
-            if os.path.exists(config_path):
-                with open(config_path, "r") as f:
-                    data = yaml.safe_load(f) or {}
-                    logger.debug("Loaded config from %s: %s", config_path, {k: v for k, v in (data or {}).items()})
-                    return data
-            # File missing: return sensible default using canonical fallback
-            logger.debug("Config file %s not found, using defaults", config_path)
-            return {"openai": {"chat_model": DEFAULT_OPENAI_MODEL}}
-        except Exception as e:
-            # Log exception and return a safe fallback config using canonical fallback
-            logger.exception("Failed to load config from %s: %s", config_path, e)
-            return {"openai": {"chat_model": DEFAULT_OPENAI_MODEL}}
+        # Delegate YAML reading and error handling to ConfigLoader
+        cfg = ConfigLoader.load(config_path)
+        if not isinstance(cfg, dict):
+            cfg = {}
+        # Ensure presence of required defaults
+        if "openai" not in cfg or not isinstance(cfg.get("openai"), dict):
+            cfg["openai"] = {}
+        if not cfg["openai"].get("chat_model"):
+            cfg["openai"]["chat_model"] = DEFAULT_OPENAI_MODEL
+            logger.debug("ModelFactory: Injected default chat_model=%s", DEFAULT_OPENAI_MODEL)
+        return cfg
 
     @staticmethod
     def get_default_model_id(config_path: str = "config.poc.yaml", model_id_override: Optional[str] = None) -> str:

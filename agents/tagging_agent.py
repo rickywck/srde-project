@@ -43,11 +43,11 @@ from typing import List, Dict, Any, Union
 from pathlib import Path
 from strands import Agent, tool
 from .prompt_loader import get_prompt_loader
-from services.similar_story_retriever import SimilarStoryRetriever
+from .utils.similar_story_retriever import SimilarStoryRetriever
 from .model_factory import ModelFactory
 from .tagging_helper import TaggingInputResolver, _rule_based_fallback, finalize_tagging_result
 import logging
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, ConfigDict
 from strands.types.exceptions import StructuredOutputException
 
 # Module logger
@@ -65,15 +65,13 @@ class TaggingDecisionOut(BaseModel):
     decision_tag: str = Field(description="new | gap | conflict")
     related_ids: List[Union[int, str]] = Field(default_factory=list)
     reason: str = ""
-
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
 
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
 
 
-def create_tagging_agent(run_id: str):
+def create_tagging_agent(run_id: str, default_similarity_threshold: float = None):
     """Create a tagging agent tool for a specific run."""
 
     # Load prompts from external configuration
@@ -83,6 +81,11 @@ def create_tagging_agent(run_id: str):
 
     # Similarity threshold from params
     similarity_threshold = float(params.get("min_similarity_threshold", DEFAULT_MIN_SIMILARITY_THRESHOLD))
+    if default_similarity_threshold is not None:
+        try:
+            similarity_threshold = float(default_similarity_threshold)
+        except Exception:
+            logger.debug("Invalid default_similarity_threshold provided; falling back to configured threshold")
 
     # Build model via ModelFactory helper; no direct config or API key access here
     try:
@@ -107,6 +110,26 @@ def create_tagging_agent(run_id: str):
         Accepts a single story. If a filesystem path (run directory or backlog file)
         is provided, the helper resolves it and returns one or more stories to tag.
         """
+
+        # Quick validation: if raw string provided, ensure it's JSON or a path
+        if isinstance(story_data, str):
+            s = story_data.strip()
+            is_path_like = s.endswith(".json") or s.endswith(".jsonl") or ("/" in s) or ("\\" in s)
+            if not is_path_like:
+                try:
+                    json.loads(s)
+                except Exception:
+                    return json.dumps({
+                        "status": "error",
+                        "run_id": run_id,
+                        "decision_tag": "new",
+                        "related_ids": [],
+                        "reason": "Invalid input JSON: non-JSON string provided",
+                        "early_exit": True,
+                        "similarity_threshold": similarity_threshold,
+                        "similar_count": 0,
+                        "model_used": model_id
+                    })
 
         # Resolve input into normalized payload (single story or list if path)
         resolver = TaggingInputResolver(default_run_id=run_id, default_threshold=similarity_threshold)
