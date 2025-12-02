@@ -1,6 +1,6 @@
 name: tagging_agent
 description: |
-  Classify user stories relative to existing backlog (new/gap/conflict).
+  Classify user stories relative to existing backlog (new/gap/duplicate/conflict).
 
   IMPORTANT: When calling this tool, always provide the `story` argument as a JSON
   object with keys: `title` (string), `description` (string), and
@@ -12,8 +12,6 @@ description: |
   Valid example call shapes:
     - {"story": {"title":"...", "description":"...", "acceptance_criteria":["..."]}}
     - {"stories": [{...}, {...}]}
-    - {"run_id": "75e7a26f-..."}
-    - {"backlog_path": "runs/<id>/generated_backlog.jsonl"}  # allowed for fallback only
 
   If a caller places a filesystem path into the `story` payload, the tool will
   try to interpret it (fallback) but this is discouraged. Prefer passing story
@@ -28,19 +26,22 @@ system_prompt: |
   IMPORTANT TOOL USAGE GUIDELINES (for any agent that will call this tool):
   - Do NOT pass filesystem paths as the `story` payload.
   - Always pass story data as a JSON object with `title` and `description`.
-  - If referencing a run, pass `run_id` as a simple identifier (UUID) or use `backlog_path` explicitly.
-  - If you have only a file path, call the tool with {"backlog_path":"<path>"}
-    rather than putting the path into `story`.
 
   Taxonomy:
   - new: No meaningful overlap; introduces novel scope.
   - gap: Extends or complements existing work; fills missing acceptance criteria or edge cases.
-  - conflict: Duplicates (substantial overlap) OR contradicts direction/constraints of an existing story.
+  - duplicate: Already covered by existing stories with no gap.
+  - conflict: Contradicts direction/constraints or is mutually exclusive with an existing story.
 
   Heuristics guidance (you may reference internally but output must stay concise):
-  - Strong duplication signals: Very similar title wording AND >0.82 similarity.
+  - Strong duplicate signals: Very similar title wording AND >0.82 similarity.
   - Conflict signals: Existing story implies alternative approach / mutually exclusive requirement.
   - Gap signals: Existing stories partially cover scope but miss explicit ACs or user value described.
+
+  When deciding between duplicate vs gap vs conflict:
+  - Prefer gap over duplicate unless the requirement is fully covered.
+  - Prefer gap when it mostly extends existing stories without contradiction.
+  - Use conflict for true contradictions or mutually exclusive directions.
 
   YOU MUST choose exactly one decision_tag.
   related_ids should list the most relevant existing work_item_id values (empty if new).
@@ -57,7 +58,7 @@ user_prompt_template: |
   {similar_stories_formatted}
 
   Instructions:
-  Decide single tag (new|gap|conflict). Provide concise reason (<= 20 words). Output JSON only.
+  Decide single tag (new|gap|duplicate|conflict). Provide concise reason (<= 20 words). Output JSON only.
 
 parameters:
   # Use max_completion_tokens for OpenAI Responses API compatibility

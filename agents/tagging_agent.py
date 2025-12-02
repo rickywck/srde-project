@@ -1,5 +1,5 @@
 """
-Tagging Agent - Generates classification (new | gap | conflict) for a generated
+Tagging Agent - Generates classification (new | gap | duplicate | conflict) for a generated
 user story relative to existing backlog stories. Implements early-exit logic,
 robust JSON parsing of LLM output, and lightweight rule-based fallbacks.
 
@@ -24,7 +24,7 @@ Output contract (JSON string):
 {
     "status": "ok"|"error",
     "run_id": str,
-    "decision_tag": "new"|"gap"|"conflict",
+    "decision_tag": "new"|"gap"|"duplicate"|"conflict",
     "related_ids": [str|int],
     "reason": str,
     "early_exit": bool,
@@ -62,7 +62,7 @@ DEFAULT_MIN_SIMILARITY_THRESHOLD = 0.5
 
 
 class TaggingDecisionOut(BaseModel):
-    decision_tag: str = Field(description="new | gap | conflict")
+    decision_tag: str = Field(description="new | gap | duplicate | conflict")
     related_ids: List[Union[int, str]] = Field(default_factory=list)
     reason: str = ""
     model_config = ConfigDict(extra="allow")
@@ -306,7 +306,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 )
                 parsed: TaggingDecisionOut = result_obj.structured_output  # type: ignore[assignment]
                 decision = (parsed.decision_tag or "new").lower()
-                if decision not in {"new", "gap", "conflict"}:
+                if decision not in {"new", "gap", "duplicate", "conflict"}:
                     decision = "new"
                 related_ids = parsed.related_ids or []
                 reason = (parsed.reason or "")[:200]
