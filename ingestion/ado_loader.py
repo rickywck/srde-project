@@ -191,6 +191,28 @@ class ADOBacklogLoader:
         )
         return response.data[0].embedding
     
+    def delete_existing_backlog(self) -> None:
+        """
+        Delete existing vectors in Pinecone for this loader's namespace
+        that match the current project and doc_type='ado_backlog'.
+
+        This prevents duplicates across runs by clearing prior backlog
+        vectors for the same project before upserting new ones.
+        """
+        index = self.pinecone_client.Index(self.index_name)
+        namespace = self.namespace
+        metadata_filter = {
+            "project": {"$eq": self.project},
+            "doc_type": {"$eq": "ado_backlog"}
+        }
+        try:
+            index.delete(filter=metadata_filter, namespace=namespace)
+            print(
+                f"Deleted existing vectors in namespace '{namespace}' where project='{self.project}' and doc_type='ado_backlog'"
+            )
+        except Exception as e:
+            print(f"Warning: failed to delete existing backlog vectors: {e}")
+    
     def load_to_pinecone(self, work_items: List[Dict[str, Any]]) -> int:
         """
         Load work items into Pinecone.
@@ -316,6 +338,8 @@ def main():
     work_items = loader.fetch_work_items()
     
     if work_items:
+        # Clear any existing vectors for this project/doc_type before loading
+        loader.delete_existing_backlog()
         print(f"Loading {len(work_items)} work items to Pinecone...")
         loader.load_to_pinecone(work_items)
         print("Done!")
