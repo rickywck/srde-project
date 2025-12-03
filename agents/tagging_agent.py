@@ -1,39 +1,6 @@
-"""
-Tagging Agent - Generates classification (new | gap | duplicate | conflict) for a generated
-user story relative to existing backlog stories. Implements early-exit logic,
-robust JSON parsing of LLM output, and lightweight rule-based fallbacks.
-
-IMPORTANT: When invoking this tool, prefer to pass a story object (not a
-filesystem path) in the `story` field. The agent accepts these shapes:
-
-1) Single story (recommended):
-     {"story": {"title": "...", "description": "...", "acceptance_criteria": ["..."]}}
-
-2) Reference a run/backlog file (fallback):
-     {"run_id": "<run-id>"}
-     or
-     {"backlog_path": "runs/<run-id>/generated_backlog.jsonl"}
-
-Robustness: If the orchestrator (Strands) or the LLM accidentally supplies a
-filesystem path (e.g. "runs/.../generated_backlog.jsonl") in the `story` field,
-this agent will now treat that string as a `backlog_path` and load the backlog
-file (fallback behavior) rather than erroring out. This keeps the tool tolerant
-to varying call shapes while encouraging the explicit, correct input shapes.
-
-Output contract (JSON string):
-{
-    "status": "ok"|"error",
-    "run_id": str,
-    "decision_tag": "new"|"gap"|"duplicate"|"conflict",
-    "related_ids": [str|int],
-    "reason": str,
-    "early_exit": bool,
-    "similarity_threshold": float,
-    "similar_count": int,
-    "model_used": str,
-    "story_internal_id": str,
-    "story_title": str
-}
+"""Tagging Agent (reference): classifies a generated user story relative to a backlog.
+Tool/system prompt and usage live in `prompts/tagging_agent.yaml`. This module
+provides the `tag_story` tool and helper logic; the YAML defines the LLM prompt.
 """
 
 import json
@@ -58,9 +25,7 @@ GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
 USER_STORY_TYPES = {"user story", "story", "user_story"}
 DEFAULT_MIN_SIMILARITY_THRESHOLD = 0.5
 
-# Note: System prompt now loaded from prompts/tagging_agent.yaml
-
-
+# Reference Pydantic model for the agent's structured output (informational only)
 class TaggingDecisionOut(BaseModel):
     decision_tag: str = Field(description="new | gap | duplicate | conflict")
     related_ids: List[Union[int, str]] = Field(default_factory=list)
@@ -105,10 +70,31 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         run_id_override: str = None,
         backlog_path: str = None,
     ) -> str:
-        """Tag a user story relative to existing backlog (new/gap/conflict).
+        """Classify ONE generated user story relative to existing backlog.
 
-        Accepts a single story. If a filesystem path (run directory or backlog file)
-        is provided, the helper resolves it and returns one or more stories to tag.
+        Usage (required): always pass `story` as a JSON-like dict with keys:
+        `title` (str), `description` (str), and `acceptance_criteria` (list).
+
+        Alternative accepted call shapes:
+        - `stories`: list of story objects
+        - `run_id`: a run identifier (string) - fallback only, not preferred
+        - `backlog_path`: explicit path to a backlog file - fallback only, not preferred
+
+        Important rules:
+        - Do NOT pass a filesystem path in the `story` field; pass `run_id`
+            or `backlog_path` when referencing existing runs/backlogs.
+        - The tool MUST choose exactly one `decision_tag` from
+            {"new","gap","duplicate","conflict"}.
+        - The tool returns STRICT JSON ONLY (no markdown, no extra prose).
+
+        Output contract (required fields in the structured response):
+                - `decision_tag`: "new"|"gap"|"duplicate"|"conflict"
+                - `related_ids`: list of most relevant existing `work_item_id` values
+                - `reason`: single short sentence (<= 20 words)
+
+        Heuristics (informational): prefer `gap` over `duplicate` unless fully
+        covered; use `conflict` for true contradictions or mutually exclusive
+        directions.
         """
 
         # Quick validation: if raw string provided, ensure it's JSON or a path
