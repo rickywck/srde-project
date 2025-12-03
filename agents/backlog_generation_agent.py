@@ -2,7 +2,6 @@
 Backlog Generation Agent - Specialized agent for generating backlog items from segments
 """
 
-import os
 import json
 import logging
 from typing import Dict, Any, List, Union
@@ -63,9 +62,9 @@ def create_backlog_generation_agent(run_id: str):
     Returns:
         A tool function that can be called by the supervisor agent
     """
-    
+
     # No direct config or api key handling in the agent. Use ModelFactory.
-    
+
     # Load prompts from external configuration
     prompt_loader = get_prompt_loader()
     system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
@@ -215,8 +214,12 @@ def create_backlog_generation_agent(run_id: str):
             
             # Ensure we can call the agent
             if agent is None:
-                logger.warning("Backlog Generation Agent: Using MOCK mode (agent init failed)")
-                return _mock_generation(segment_id, segment_text, intent_labels, run_id)
+                error_msg = {
+                    "status": "error",
+                    "error": "Backlog Generation Agent not initialized. No model available.",
+                    "run_id": run_id
+                }
+                return json.dumps(error_msg, indent=2)
 
             logger.info("Backlog Generation Agent: Calling Strands Agent (%s) with structured output...", model_name)
             try:
@@ -227,11 +230,21 @@ def create_backlog_generation_agent(run_id: str):
                 # Strands returns validated structured output; ensure correct type
                 validated: BacklogResponseIn = result.structured_output  # type: ignore[assignment]
             except (StructuredOutputException, ValidationError) as e:
-                logger.warning("Backlog Generation Agent: Structured output failed, using fallback. Reason: %s", e)
-                return _mock_generation(segment_id, segment_text, intent_labels, run_id)
+                logger.error("Backlog Generation Agent: Structured output failed: %s", e)
+                error_msg = {
+                    "status": "error",
+                    "error": f"Backlog generation structured output failed: {str(e)}",
+                    "run_id": run_id
+                }
+                return json.dumps(error_msg, indent=2)
             except Exception as e:
                 logger.exception("Backlog Generation Agent: Agent invocation failed: %s", e)
-                return _mock_generation(segment_id, segment_text, intent_labels, run_id)
+                error_msg = {
+                    "status": "error",
+                    "error": f"Backlog generation agent invocation failed: {str(e)}",
+                    "run_id": run_id
+                }
+                return json.dumps(error_msg, indent=2)
 
             backlog_items_models = validated.backlog_items
             # Convert to plain dicts for normalization / writing
@@ -303,8 +316,13 @@ def create_backlog_generation_agent(run_id: str):
             return json.dumps(summary, indent=2)
             
         except json.JSONDecodeError as e:
-            logger.warning("Backlog Generation Agent: JSON parse failed (legacy path), using fallback. Reason: %s", str(e))
-            return _mock_generation(segment_id, segment_text, intent_labels, run_id)
+            logger.warning("Backlog Generation Agent: JSON parse failed (legacy path). Reason: %s", str(e))
+            error_msg = {
+                "status": "error",
+                "error": f"Invalid JSON payload: {str(e)}",
+                "run_id": run_id
+            }
+            return json.dumps(error_msg, indent=2)
         
         except Exception as e:
             logger.exception("Backlog generation failed for segment %s: %s", segment_id, e)
@@ -319,84 +337,4 @@ def create_backlog_generation_agent(run_id: str):
 
 
 # Note: Prompt building now handled by prompt_loader from prompts/backlog_generation_agent.yaml
-
-
-def _mock_generation(segment_id: int, segment_text: str, intent_labels: list, run_id: str) -> str:
-    """Generate simple mock backlog: 1 epic, 1 feature, 1 user story."""
-
-    epic_title = "Sample Epic: Improve User Onboarding"
-    feature_title = "Sample Feature: Guided Onboarding Flow"
-    story_title = "User Story: As a new user, I want a guided setup"
-
-    mock_items = [
-        {
-            "type": "Epic",
-            "title": epic_title,
-            "description": f"High-level initiative derived from segment {segment_id}. {segment_text[:200]}...",
-            "acceptance_criteria": [
-                "Epic goals are defined",
-                "Stakeholders aligned on scope"
-            ],
-            "parent_reference": "",
-            "rationale": "Mock epic for local testing",
-            "internal_id": f"epic_{segment_id}_1",
-            "segment_id": segment_id,
-            "run_id": run_id,
-        },
-        {
-            "type": "Feature",
-            "title": feature_title,
-            "description": "Provide a step-by-step onboarding experience with helpful tips.",
-            "acceptance_criteria": [
-                "Onboarding covers account setup and first action",
-                "Completion rate tracked via analytics"
-            ],
-            "parent_reference": epic_title,
-            "rationale": "Supports the onboarding epic",
-            "internal_id": f"feature_{segment_id}_1",
-            "segment_id": segment_id,
-            "run_id": run_id,
-        },
-        {
-            "type": "User Story",
-            "title": story_title,
-            "description": "Guide users through profile creation and initial configuration.",
-            "acceptance_criteria": [
-                "User completes profile setup in under 3 minutes",
-                "Progress is saved between steps"
-            ],
-            "parent_reference": feature_title,
-            "rationale": "Delivers immediate value in onboarding",
-            "internal_id": f"story_{segment_id}_1",
-            "segment_id": segment_id,
-            "run_id": run_id,
-        },
-    ]
-
-    # Save to file
-    output_dir = Path(f"runs/{run_id}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    backlog_file = output_dir / "generated_backlog.jsonl"
-    
-    with open(backlog_file, "a") as f:
-        for item in mock_items:
-            f.write(json.dumps(item) + "\n")
-    
-    summary = {
-        "status": "success_mock",
-        "run_id": run_id,
-        "segment_id": segment_id,
-        "items_generated": len(mock_items),
-        "backlog_file": str(backlog_file),
-        "note": "Mock data - set OPENAI_API_KEY for real generation",
-        "item_counts": {
-            "epics": sum(1 for item in mock_items if item.get("type", "").lower() == "epic"),
-            "features": sum(1 for item in mock_items if item.get("type", "").lower() == "feature"),
-            "stories": sum(1 for item in mock_items if item.get("type", "").lower() in ("story", "user story")),
-        },
-        "backlog_items": mock_items
-    }
-    
-    return json.dumps(summary, indent=2)
-
 # Note: System prompt and user prompt template now loaded from prompts/backlog_generation_agent.yaml

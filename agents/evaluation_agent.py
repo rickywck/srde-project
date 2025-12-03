@@ -23,18 +23,6 @@ EVALUATION_SCHEMA = {
     "summary": "string",
 }
 
-def _mock_evaluation() -> Dict[str, Any]:
-    return {
-        "status": "success_mock",
-        "evaluation": {
-            "completeness": {"score": 4, "reasoning": "Most key points captured in backlog."},
-            "relevance": {"score": 5, "reasoning": "Items are tightly linked to segment intents."},
-            "quality": {"score": 4, "reasoning": "Titles and ACs are clear with minor improvement room."},
-            "overall_score": 4.33,
-            "summary": "Backlog items are generally strong and actionable."
-        }
-    }
-
 
 class ScoreReason(BaseModel):
     score: int = Field(ge=1, le=5, description="Score from 1 to 5")
@@ -94,26 +82,6 @@ def create_evaluation_agent(run_id: str):
         retrieved_context = payload.get("retrieved_context", {})
         generated_backlog = payload.get("generated_backlog", [])
         evaluation_mode = payload.get("evaluation_mode", "live")
-
-        # Mock mode
-        if os.getenv("EVALUATION_AGENT_MOCK") == "1":
-            logger.debug("Evaluation agent model in mock mode.")
-            mock = _mock_evaluation()
-            mock.update({
-                "run_id": run_id,
-                "segment_length": len(segment_text),
-                "items_evaluated": len(generated_backlog),
-                "mode": evaluation_mode,
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            # Persist if live mode (even in mock mode for testing)
-            if evaluation_mode == "live":
-                out_dir = Path(f"runs/{run_id}")
-                out_dir.mkdir(parents=True, exist_ok=True)
-                eval_file = out_dir / "evaluation.jsonl"
-                with open(eval_file, "a") as f:
-                    f.write(json.dumps(mock) + "\n")
-            return json.dumps(mock, indent=2)
 
         if not model:
             return json.dumps({"status": "error", "error": "No model available for evaluation."}, indent=2)

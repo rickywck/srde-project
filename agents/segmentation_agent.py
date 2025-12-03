@@ -1,8 +1,6 @@
 """
 Segmentation Agent - Specialized agent for document segmentation with intent detection
 """
-
-import os
 import json
 import logging
 from pathlib import Path
@@ -92,75 +90,27 @@ def create_segmentation_agent(run_id: str):
         
         try:
             logger.info("Segmentation Agent: Processing document (run_id: %s)", run_id)
+            # Require live LLM; no mock mode
+            if agent is None:
+                raise ValueError("Segmentation agent not initialized. No model available.")
 
-            # Mock mode for offline / no network testing
-            if os.getenv("SEGMENTATION_AGENT_MOCK") == "1":
-                logger.info("Segmentation Agent: Using MOCK mode (SEGMENTATION_AGENT_MOCK=1)")
-                # Simple segmentation by double newlines
-                raw_segments = [s.strip() for s in document_text.split("\n\n") if s.strip()]
-
-                def _generate_intents(text: str):
-                    lower = text.lower()
-                    intents = []
-                    patterns = [
-                        ("multi-factor authentication", ["multi_factor_authentication_security_upgrade", "sms_email_totp_channel_support", "auth_service_schema_migration_requirement", "secure_account_access_for_users"]),
-                        ("performance", ["dashboard_search_api_latency_optimization", "database_query_index_additions", "p95_response_time_reduction_goal"]),
-                        ("offline mode", ["offline_sync_local_cache_strategy", "offline_document_access_user_value"]),
-                        ("api documentation", ["api_docs_code_comment_generation_adoption", "developer_integration_experience_improvement", "technical_debt_documentation_modernization"]),
-                        ("open questions", ["timeline_for_auth_enhancement_delivery", "budget_for_offline_mode_initiative", "ownership_api_doc_tooling_setup"]),
-                    ]
-                    for trigger, labels in patterns:
-                        if trigger in lower:
-                            intents.extend(labels)
-                    # Fallback heuristic: take top keywords
-                    if not intents:
-                        import re
-                        words = re.findall(r"[a-zA-Z_]{4,}", lower)
-                        stop = {"this", "that", "with", "from", "have", "will", "need", "users", "been", "were", "also", "even", "such", "into", "then", "them", "they", "high", "mode", "docs", "api", "page"}
-                        filtered = [w for w in words if w not in stop]
-                        unique = []
-                        for w in filtered:
-                            if w not in unique:
-                                unique.append(w)
-                        base = unique[:4] if unique else ["general", "segment"]
-                        intents.append("_".join(base) + "_topic_focus")
-                    # Trim to 3–6 intents
-                    if len(intents) > 6:
-                        intents = intents[:6]
-                    dominant = intents[0]
-                    return intents, dominant
-
-                segments = []
-                for i, seg_text in enumerate(raw_segments, 1):
-                    intents, dominant = _generate_intents(seg_text)
-                    segments.append({
-                        "segment_id": i,
-                        "segment_order": i,
-                        "raw_text": seg_text,
-                        "intent_labels": intents,
-                        "dominant_intent": dominant
-                    })
-                result = {"status": "success_mock", "segments": segments}
-            else:
-                if agent is None:
-                    raise ValueError("Segmentation agent not initialized and mock mode not enabled. Set SEGMENTATION_AGENT_MOCK=1 to use mock.")
-                # Use Strands with Structured Output
-                try:
-                    agent_result = agent(
-                        segmentation_prompt,
-                        structured_output_model=SegmentationResponseIn,
-                    )
-                    validated: SegmentationResponseIn = agent_result.structured_output  # type: ignore[assignment]
-                    # Convert to plain dict for downstream compatibility
-                    result: Dict[str, Any] = {"segments": []}
-                    for seg in validated.segments:
-                        try:
-                            seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
-                        except Exception:
-                            seg_dict = dict(seg)
-                        result["segments"].append(seg_dict)
-                except (StructuredOutputException, ValidationError) as e:
-                    raise ValueError(f"Structured output failed: {e}")
+            # Use Strands with Structured Output
+            try:
+                agent_result = agent(
+                    segmentation_prompt,
+                    structured_output_model=SegmentationResponseIn,
+                )
+                validated: SegmentationResponseIn = agent_result.structured_output  # type: ignore[assignment]
+                # Convert to plain dict for downstream compatibility
+                result: Dict[str, Any] = {"segments": []}
+                for seg in validated.segments:
+                    try:
+                        seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
+                    except Exception:
+                        seg_dict = dict(seg)
+                    result["segments"].append(seg_dict)
+            except (StructuredOutputException, ValidationError) as e:
+                raise ValueError(f"Structured output failed: {e}")
             
             # Validate structure
             if "segments" not in result:
