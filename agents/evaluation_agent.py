@@ -24,6 +24,9 @@ EVALUATION_SCHEMA = {
 }
 
 
+# NOTE: We do not read cached evaluations. Persist only the latest result by overwriting the file.
+
+
 class ScoreReason(BaseModel):
     score: int = Field(ge=1, le=5, description="Score from 1 to 5")
     reasoning: str
@@ -84,7 +87,7 @@ def create_evaluation_agent(run_id: str):
         evaluation_mode = payload.get("evaluation_mode", "live")
 
         if not model:
-            return json.dumps({"status": "error", "error": "No model available for evaluation."}, indent=2)
+            return json.dumps({"status": "error", "error": "No model available for evaluation.", "run_id": run_id}, indent=2)
 
         logger.debug("Evaluation agent model in live mode.")
         try:
@@ -191,12 +194,12 @@ def create_evaluation_agent(run_id: str):
                 "timestamp": datetime.utcnow().isoformat(),
                 "model_used": model_id,
             }
-            # Persist if live mode
+            # Persist if live mode — overwrite with latest evaluation
             if evaluation_mode == "live":
                 out_dir = Path(f"runs/{run_id}")
                 out_dir.mkdir(parents=True, exist_ok=True)
                 eval_file = out_dir / "evaluation.jsonl"
-                with open(eval_file, "a") as f:
+                with open(eval_file, "w") as f:
                     f.write(json.dumps(result) + "\n")
             return json.dumps(result, indent=2)
         except (StructuredOutputException, ValidationError) as e:
