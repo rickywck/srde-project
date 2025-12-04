@@ -77,6 +77,61 @@ def create_evaluation_agent(run_id: str):
 
     @tool
     def evaluate_backlog_quality(input_json: str) -> str:
+        """Evaluate the quality of generated backlog items against the original document.
+        
+        This tool performs LLM-as-a-judge evaluation to assess backlog quality across
+        three dimensions: completeness, relevance, and quality.
+        
+        Args:
+            input_json: A JSON string containing the evaluation request with the following structure:
+                {
+                    "segment_text": "<full original document text to evaluate against>",
+                    "generated_backlog": [
+                        {
+                            "type": "Epic|Feature|User Story",
+                            "title": "<item title>",
+                            "description": "<item description>",
+                            "acceptance_criteria": ["<criterion 1>", "<criterion 2>", ...]
+                        },
+                        ...
+                    ],
+                    "evaluation_mode": "live|batch"  (optional, defaults to "live")
+                }
+        
+        Returns:
+            JSON string with evaluation results:
+            {
+                "status": "success|error",
+                "run_id": "<run_id>",
+                "evaluation": {
+                    "completeness": {"score": 1-5, "reasoning": "..."},
+                    "relevance": {"score": 1-5, "reasoning": "..."},
+                    "quality": {"score": 1-5, "reasoning": "..."},
+                    "overall_score": <float>,
+                    "summary": "..."
+                },
+                "segment_length": <int>,
+                "items_evaluated": <int>,
+                "mode": "live|batch",
+                "timestamp": "<ISO timestamp>",
+                "model_used": "<model_id>"
+            }
+        
+        Example:
+            input_json = json.dumps({
+                "segment_text": "The system shall support user authentication...",
+                "generated_backlog": [
+                    {
+                        "type": "User Story",
+                        "title": "User Login",
+                        "description": "As a user, I want to log in...",
+                        "acceptance_criteria": ["User can enter credentials", "System validates input"]
+                    }
+                ],
+                "evaluation_mode": "live"
+            })
+            result = evaluate_backlog_quality(input_json)
+        """
         try:
             payload = json.loads(input_json)
         except json.JSONDecodeError as e:
