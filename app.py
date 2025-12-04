@@ -346,6 +346,42 @@ async def get_backlog(run_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get backlog: {str(e)}")
 
+@app.get("/evaluation/{run_id}")
+async def get_evaluation(run_id: str):
+    """
+    Get evaluation results for a run
+    Returns the latest evaluation in structured format
+    """
+    try:
+        run_dir = get_run_dir(run_id)
+        evaluation_file = run_dir / "evaluation.jsonl"
+        
+        if not evaluation_file.exists():
+            return {"run_id": run_id, "evaluation": None, "message": "No evaluation results yet"}
+        
+        # Read the last evaluation result
+        evaluation_result = None
+        with open(evaluation_file, "r") as f:
+            for line in f:
+                if line.strip():
+                    evaluation_result = json.loads(line)
+        
+        if not evaluation_result:
+            return {"run_id": run_id, "evaluation": None, "message": "No evaluation results found"}
+        
+        return {
+            "run_id": run_id,
+            "evaluation": evaluation_result.get("evaluation", {}),
+            "items_evaluated": evaluation_result.get("items_evaluated", 0),
+            "segment_length": evaluation_result.get("segment_length", 0),
+            "timestamp": evaluation_result.get("timestamp"),
+            "model_used": evaluation_result.get("model_used"),
+            "mode": evaluation_result.get("mode", "live")
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get evaluation: {str(e)}")
+
 @app.get("/tagging/{run_id}")
 async def get_tagging(run_id: str):
     """

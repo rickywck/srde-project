@@ -450,6 +450,59 @@ function renderAdoExportFromData(data) {
     }
 }
 
+// Build standardized evaluation panel (table + optional metadata)
+function buildEvaluationPanel(evaluation, meta = {}) {
+    const ev = evaluation || {};
+    let html = '<div style="font-weight:600;margin-bottom:4px;">📊 Quality Evaluation</div>';
+    html += '<table class="evaluation-table" style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">';
+    html += '<colgroup><col style="width:30%"><col style="width:20%"><col style="width:50%"></colgroup>';
+    html += '<thead><tr>' +
+        '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Metric</th>' +
+        '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Score</th>' +
+        '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Reasoning</th>' +
+        '</tr></thead><tbody>';
+    const rows = [
+        ['Completeness', ev.completeness?.score, ev.completeness?.reasoning],
+        ['Relevance', ev.relevance?.score, ev.relevance?.reasoning],
+        ['Quality', ev.quality?.score, ev.quality?.reasoning]
+    ];
+    for (const r of rows) {
+        if (r[1] !== undefined) {
+            html += `<tr><td style="border:1px solid #ddd;padding:4px;">${r[0]}</td><td style="border:1px solid #ddd;padding:4px;">${r[1]}</td><td style=\"border:1px solid #ddd;padding:4px;\">${r[2] || ''}</td></tr>`;
+        }
+    }
+    if (ev.overall_score !== undefined) {
+        html += `<tr><td style=\"border:1px solid #ddd;padding:4px;font-weight:600;\">Overall</td><td style=\"border:1px solid #ddd;padding:4px;font-weight:600;\">${ev.overall_score}</td><td style=\"border:1px solid #ddd;padding:4px;\"></td></tr>`;
+    }
+    if (ev.summary) {
+        html += `<tr><td style=\"border:1px solid #ddd;padding:4px;\">Summary</td><td style=\"border:1px solid #ddd;padding:4px;\">-</td><td style=\"border:1px solid #ddd;padding:4px;\">${ev.summary}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    // Footer metadata
+    const parts = [];
+    if (meta.items_evaluated != null) parts.push(`Items evaluated: ${meta.items_evaluated}`);
+    if (meta.segment_length != null) parts.push(`Document length: ${Number(meta.segment_length).toLocaleString()} chars`);
+    if (meta.model_used) parts.push(`Model: ${meta.model_used}`);
+    if (meta.timestamp) parts.push(`Timestamp: ${new Date(meta.timestamp).toLocaleString()}`);
+    if (parts.length) {
+        html += `<div style=\"margin-top:6px;color:#999;font-size:12px;\">${parts.join(' | ')}</div>`;
+    }
+    return html;
+}
+
+// Render evaluation result (used by chatbot mode)
+function renderEvaluationFromData(data) {
+    const evaluation = data?.evaluation || {};
+    const meta = {
+        items_evaluated: data?.items_evaluated,
+        segment_length: data?.segment_length,
+        model_used: data?.model_used,
+        timestamp: data?.timestamp
+    };
+    const html = buildEvaluationPanel(evaluation, meta);
+    addMessage('assistant', html);
+}
+
 async function handleChatFileSelect(event) {
     const file = event.target.files[0];
     if (file) {
@@ -638,6 +691,23 @@ async function sendMessage() {
                 }
             } catch (e) {
                 addMessage('system', `❌ Failed to load ADO export result: ${e.message}`);
+            }
+        } else if (data && data.response_type === 'evaluation') {
+            if (data.response) {
+                addMessage('assistant', data.response);
+            }
+            // Fetch evaluation result and render it
+            try {
+                const res = await fetch(`/evaluation/${currentRunId}`);
+                if (res.ok) {
+                    const evalData = await res.json();
+                    renderEvaluationFromData(evalData);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    addMessage('system', `❌ Failed to load evaluation result: ${err.detail || res.status}`);
+                }
+            } catch (e) {
+                addMessage('system', `❌ Failed to load evaluation result: ${e.message}`);
             }
         } else {
             // Default assistant text response
@@ -1026,37 +1096,13 @@ async function evaluateQuality() {
         if (!resp.ok) throw new Error('Evaluation request failed');
         const data = await resp.json();
         const ev = data.evaluation || {};
-        // Render evaluation in a single table for clarity
-        const messageDiv = document.createElement('div');
-        messageDiv.className = 'message assistant';
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'message-content';
-        let html = '<div style="font-weight:600;margin-bottom:4px;">📊 Quality Evaluation</div>';
-        html += '<table class="evaluation-table" style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">';
-        html += '<colgroup><col style="width:30%"><col style="width:20%"><col style="width:50%"></colgroup>';
-        html += '<thead><tr>' +
-            '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Metric</th>' +
-            '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Score</th>' +
-            '<th style="border:1px solid #ccc;padding:4px;background:#f5f5f5;text-align:left;">Reasoning</th>' +
-            '</tr></thead><tbody>';
-        const rows = [
-            ['Completeness', ev.completeness?.score, ev.completeness?.reasoning],
-            ['Relevance', ev.relevance?.score, ev.relevance?.reasoning],
-            ['Quality', ev.quality?.score, ev.quality?.reasoning]
-        ];
-        for (const r of rows) {
-            if (r[1] !== undefined) {
-                html += `<tr><td style="border:1px solid #ddd;padding:4px;">${r[0]}</td><td style="border:1px solid #ddd;padding:4px;">${r[1]}</td><td style="border:1px solid #ddd;padding:4px;">${r[2] || ''}</td></tr>`;
-            }
-        }
-        if (ev.overall_score !== undefined) {
-            html += `<tr><td style="border:1px solid #ddd;padding:4px;font-weight:600;">Overall</td><td style="border:1px solid #ddd;padding:4px;font-weight:600;">${ev.overall_score}</td><td style="border:1px solid #ddd;padding:4px;"></td></tr>`;
-        }
-        if (ev.summary) {
-            html += `<tr><td style="border:1px solid #ddd;padding:4px;">Summary</td><td style="border:1px solid #ddd;padding:4px;">-</td><td style="border:1px solid #ddd;padding:4px;">${ev.summary}</td></tr>`;
-        }
-        html += '</tbody></table>';
-        // Render as assistant message (addMessage will include metadata)
+        const meta = {
+            items_evaluated: data?.items_evaluated,
+            segment_length: data?.segment_length,
+            model_used: data?.status?.model || data?.model_used,
+            timestamp: data?.timestamp
+        };
+        const html = buildEvaluationPanel(ev, meta);
         addMessage('assistant', html);
     } catch (error) {
         console.error('Evaluation error:', error);
