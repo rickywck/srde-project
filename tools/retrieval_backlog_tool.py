@@ -79,18 +79,25 @@ def create_retrieval_backlog_tool(run_id: str):
         segments_file_path: Optional[str] = None,
     ) -> str:
         """
-        Generate backlog items for a segment WITH retrieval, returning only generation results.
+        Generate backlog items WITH context retrieval, returning only generation results.
 
-        Inputs (either provide segment_text/intents OR a segment_id):
-        - segment_id: integer id of segment to load from runs/<run_id>/segments.jsonl
-        - segment_text: raw text of the segment
-        - intent_labels: list of intent labels for the segment
-        - dominant_intent: dominant intent label
+        This tool supports TWO input modes:
+        1. From uploaded document: Load a pre-segmented chunk via segment_id from segments.jsonl
+        2. From chat input: Provide raw requirement text directly via segment_text (no document upload needed)
+
+        Parameters:
+        - segment_id: integer id to load from runs/<run_id>/segments.jsonl (for uploaded documents)
+        - segment_text: raw requirement text (use this for direct chat input OR segment text)
+        - intent_labels: list of intent labels (optional, can be inferred)
+        - dominant_intent: dominant intent label (optional, can be inferred)
         - segments_file_path: optional override path to segments.jsonl
+        - segment_data: alternatively, pass all fields as a JSON object
 
-        You can also pass a single JSON object via segment_data with the same fields.
-
-        Output: JSON string with backlog generation summary (no retrieval payload)
+        Output: JSON string with backlog generation summary (retrieval context is NOT included in output)
+        
+        Use cases:
+        - User uploaded document: Call with segment_id after segmentation
+        - User typed requirements in chat: Call with segment_text directly (no segmentation needed)
         """
         try:
             # Parse json object if provided
