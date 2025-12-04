@@ -141,29 +141,8 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 "model_used": model_id
             })
 
-        # Output dir and processed key cache
-        current_out_dir: Path = resolved["out_dir"]
-        processed_story_keys: set = set()
-        try:
-            current_out_dir.mkdir(parents=True, exist_ok=True)
-            # seed de-dupe set from existing file
-            tag_file = current_out_dir / "tagging.jsonl"
-            if tag_file.exists():
-                with open(tag_file, "r") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        try:
-                            obj = json.loads(line)
-                            k = str(obj.get("story_internal_id") or obj.get("story_title") or "")
-                            if k:
-                                processed_story_keys.add(k)
-                        except Exception:
-                            continue
-        except Exception:
-            processed_story_keys = set()
-
         # Finalize/persist behavior moved to `finalize_tagging_result` in tagging_helper
+        current_out_dir: Path = resolved["out_dir"]
 
         stories: List[Dict[str, Any]] = resolved.get("stories") or []
         effective_run_id: str = resolved.get("run_id") or run_id
@@ -244,7 +223,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "similar_count": 0,
                     "model_used": model_id
                 }
-                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
 
             # Build prompt for LLM using template
@@ -281,7 +260,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": True
                 }
-                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
 
             try:
@@ -308,7 +287,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": False
                 }
-                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
             except (StructuredOutputException, ValidationError) as e:
                 logger.warning("Tagging Agent: Structured output failed, using rule-based fallback. Reason: %s", e)
@@ -325,7 +304,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": True
                 }
-                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
             except Exception as e:
                 logger.exception("Tagging Agent: Agent invocation failed, using rule-based fallback: %s", e)
@@ -342,7 +321,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                     "model_used": model_id,
                     "fallback_used": True
                 }
-                finalize_tagging_result(result, current_out_dir, processed_story_keys, internal_id, title)
+                finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
 
         # Process stories (single normally; multiple only when path provided)

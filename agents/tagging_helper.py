@@ -52,7 +52,6 @@ def _rule_based_fallback(story: Dict[str, Any], similar: List[Dict[str, Any]], t
 def finalize_tagging_result(
     result: Dict[str, Any],
     out_dir: Path,
-    processed_keys: set,
     internal_id: Any = None,
     title: str = None,
 ) -> None:
@@ -66,6 +65,28 @@ def finalize_tagging_result(
       durability, and adds the key to `processed_keys` on success.
     - Swallows filesystem errors to avoid failing the overall tagging flow.
     """
+
+    # Output dir and processed key cache
+    processed_keys: set = set()
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # seed de-dupe set from existing file
+        tag_file = out_dir / "tagging.jsonl"
+        if tag_file.exists():
+            with open(tag_file, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        k = str(obj.get("story_internal_id") or obj.get("story_title") or "")
+                        if k:
+                            processed_keys.add(k)
+                    except Exception:
+                        continue
+    except Exception:
+        processed_keys = set()
+
     if internal_id:
         result["story_internal_id"] = internal_id
     if title:
