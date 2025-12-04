@@ -4,7 +4,7 @@ version: 1.0
 
 system_prompt: |
   You are an expert product manager and backlog quality evaluator. 
-  Evaluate the generated backlog items based on the original segment and retrieved context. 
+  Evaluate the generated backlog items based on the original document text. 
   Return strict JSON with keys: completeness, relevance, quality, overall_score, summary. 
   Each dimension (completeness, relevance, quality) must have a score 1-5 and a reasoning string. 
   overall_score is the mean of the three scores (to one decimal if needed). 
@@ -14,17 +14,11 @@ user_prompt_template: |
   ## ORIGINAL DOCUMENT
   {segment_text}
 
-  ## CONTEXT - EXISTING ADO ITEMS
-  {ado_items_formatted}
-
-  ## CONTEXT - ARCHITECTURE CONSTRAINTS
-  {architecture_constraints_formatted}
-
   ## GENERATED BACKLOG ITEMS
   {backlog_items_formatted}
 
   ## TASK
-  Evaluate backlog quality. Provide JSON only.
+  Evaluate backlog quality against the original document. Provide JSON only.
   Schema: {evaluation_schema}
 
 evaluation_schema:

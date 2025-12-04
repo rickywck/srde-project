@@ -49,10 +49,11 @@ def create_evaluation_agent(run_id: str):
     Returns a tool function evaluate_backlog_quality that accepts a JSON string with:
     {
         "segment_text": str,
-        "retrieved_context": {"ado_items": [...], "architecture_constraints": [...]},
         "generated_backlog": [...],
         "evaluation_mode": "live" | "batch"
     }
+    
+    Evaluates generated backlog items against the original document text only.
     """
     # Module logger
     logger = logging.getLogger(__name__)
@@ -82,7 +83,6 @@ def create_evaluation_agent(run_id: str):
             return json.dumps({"status": "error", "error": f"Invalid JSON payload: {e}"})
 
         segment_text = payload.get("segment_text", "")
-        retrieved_context = payload.get("retrieved_context", {})
         generated_backlog = payload.get("generated_backlog", [])
         evaluation_mode = payload.get("evaluation_mode", "live")
 
@@ -99,25 +99,6 @@ def create_evaluation_agent(run_id: str):
                 except Exception:
                     s = ""
                 return s[:max_len] if (max_len is not None) else s
-
-            # ADO items context
-            ado_items_fmt = []
-            for item in (retrieved_context.get("ado_items") or [])[:5]:
-                if not isinstance(item, dict):
-                    continue
-                work_item_id = _safe_str(item.get("work_item_id", "?"))
-                title = _safe_str(item.get("title"), 200)
-                desc = _safe_str(item.get("description"), 120)
-                ado_items_fmt.append(f"- [{work_item_id}] {title} :: {desc}")
-
-            # Architecture constraints context
-            arch_fmt = []
-            for c in (retrieved_context.get("architecture_constraints") or [])[:5]:
-                if not isinstance(c, dict):
-                    continue
-                fname = _safe_str(c.get("file_name", "constraint"))
-                text = _safe_str(c.get("text"), 120)
-                arch_fmt.append(f"- {fname} :: {text}")
 
             # Generated backlog context
             backlog_fmt = []
@@ -148,8 +129,6 @@ def create_evaluation_agent(run_id: str):
         user_prompt = prompt_loader.format_user_prompt(
             "evaluation_agent",
             segment_text=segment_text[:4000],
-            ado_items_formatted=os.linesep.join(ado_items_fmt) if ado_items_fmt else "None",
-            architecture_constraints_formatted=os.linesep.join(arch_fmt) if arch_fmt else "None",
             backlog_items_formatted=os.linesep.join(backlog_fmt) if backlog_fmt else "None",
             evaluation_schema=json.dumps(evaluation_schema, indent=2)
         )

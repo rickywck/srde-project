@@ -263,7 +263,6 @@ class BacklogSynthesisWorkflow:
         evaluation_tool = create_evaluation_agent(self.run_id)
         payload = {
             "segment_text": segment_text,
-            "retrieved_context": {"ado_items": [], "architecture_constraints": []},
             "generated_backlog": generated_items,
             "evaluation_mode": "live"
         }
