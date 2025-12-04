@@ -45,6 +45,7 @@ class BacklogSynthesisWorkflow:
             "tagging": [],
             "evaluation": None
         }
+        self.document_text = None  # Store full document text for evaluation
         
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file"""
@@ -80,6 +81,7 @@ class BacklogSynthesisWorkflow:
         Returns comprehensive results including all intermediate artifacts.
         """
         self.log_progress("🚀 Starting backlog synthesis workflow")
+        self.document_text = document_text  # Store full document text for evaluation
         
         # Clear previous run artifacts to ensure fresh state
         for filename in ["generated_backlog.jsonl", "tagging.jsonl", "segments.jsonl", "evaluation.jsonl"]:
@@ -255,7 +257,7 @@ class BacklogSynthesisWorkflow:
             raise ValueError("Backlog file is empty")
         
         # Get segment text for context
-        segment_text = self._get_representative_segment_text()
+        segment_text = self.document_text or self._get_representative_segment_text()
         
         # Prepare evaluation payload
         evaluation_tool = create_evaluation_agent(self.run_id)

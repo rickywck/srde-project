@@ -11,7 +11,7 @@ system_prompt: |
   Do not include any suggestions or improvement list.
 
 user_prompt_template: |
-  ## ORIGINAL SEGMENT
+  ## ORIGINAL DOCUMENT
   {segment_text}
 
   ## CONTEXT - EXISTING ADO ITEMS
