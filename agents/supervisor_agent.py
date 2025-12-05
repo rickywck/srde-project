@@ -17,6 +17,7 @@ from agents.supervisor_helper import SupervisorRunHelper
 # Import specialized agents and tools
 from agents.segmentation_agent import create_segmentation_agent
 from agents.backlog_generation_agent import create_backlog_generation_agent
+from agents.backlog_regeneration_agent import create_backlog_regeneration_agent
 from agents.tagging_agent import create_tagging_agent
 from tools.ado_writer_tool import create_ado_writer_tool
 from agents.evaluation_agent import create_evaluation_agent
@@ -115,6 +116,7 @@ class SupervisorAgent:
             self.logger.info("Supervisor: Creating agent for run_id=%s with model_id=%s", run_id, model_id)
             segmentation_agent = create_segmentation_agent(run_id)
             backlog_generation_agent = create_backlog_generation_agent(run_id)
+            backlog_regeneration_agent = create_backlog_regeneration_agent(run_id)
             tagging_agent = create_tagging_agent(run_id)
             retrieval_backlog_tool = create_retrieval_backlog_tool(run_id)
             evaluation_agent = create_evaluation_agent(run_id)
@@ -151,6 +153,7 @@ class SupervisorAgent:
                 tools=[
                     segmentation_agent,
                     backlog_generation_agent,
+                    backlog_regeneration_agent,
                     tagging_agent,
                     retrieval_backlog_tool,
                     evaluation_agent,
@@ -212,6 +215,7 @@ class SupervisorAgent:
                     "agents_available": [
                         "segment_document",
                         "generate_backlog",
+                        "regenerate_backlog",
                         "tag_story",
                         "generate_backlog_with_retrieval",
                         "evaluate_backlog_quality",
