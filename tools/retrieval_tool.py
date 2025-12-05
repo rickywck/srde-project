@@ -6,7 +6,7 @@ import os
 import json
 import yaml
 import logging
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List
 from openai import OpenAI
 from pinecone import Pinecone
 from strands import tool
@@ -81,27 +81,10 @@ def create_retrieval_tool(run_id: str):
         ), 0.5
     )
     
-    def _safe_json_extract(text: str) -> Dict[str, Any]:
-        if text is None:
-            return {}
-        if isinstance(text, (dict, list)):
-            return text
-        try:
-            return json.loads(text)
-        except Exception:
-            pass
-        import re
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return {}
-        return {}
+    # Legacy JSON input extraction removed; callers provide structured args
 
     @tool
     def retrieve_context(
-        query_data: Union[str, Dict[str, Any]] = None,
         segment_text: str = None,
         intent_labels: List[str] = None,
         dominant_intent: str = None,
@@ -109,33 +92,25 @@ def create_retrieval_tool(run_id: str):
     ) -> str:
         """
         Retrieve relevant context from Pinecone (ADO backlog items and architecture constraints).
-        
+
         Args:
-            query_data: JSON string containing query information with fields:
-                - segment_text: The segment text
-                - intent_labels: List of intent labels
-                - dominant_intent: The dominant intent
-                - segment_id: The segment identifier
-            
+            segment_text: The segment text to embed and query with
+            intent_labels: List of intent labels
+            dominant_intent: The dominant intent
+            segment_id: The segment identifier
+
         Returns:
             JSON string containing retrieved ADO items and architecture constraints
         """
-        logger.debug("retrieve_context called with: query_data=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, segment_id=%r, run_id=%r",
-                     query_data, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, segment_id, run_id)
+        logger.debug("retrieve_context called with: segment_text=%s..., intent_labels=%r, dominant_intent=%r, segment_id=%r, run_id=%r",
+                 segment_text[:100] if segment_text else None, intent_labels, dominant_intent, segment_id, run_id)
         
         try:
-            # Parse input (support structured and legacy string argument)
-            if query_data is not None and (segment_text is None and segment_id is None):
-                query_info = _safe_json_extract(query_data)
-                segment_text = query_info.get("segment_text", "")
-                intent_labels = query_info.get("intent_labels", [])
-                dominant_intent = query_info.get("dominant_intent", "")
-                segment_id = query_info.get("segment_id", 0)
-            else:
-                segment_text = segment_text or ""
-                intent_labels = intent_labels or []
-                dominant_intent = dominant_intent or ""
-                segment_id = int(segment_id or 0)
+            # Normalize structured inputs
+            segment_text = segment_text or ""
+            intent_labels = intent_labels or []
+            dominant_intent = dominant_intent or ""
+            segment_id = int(segment_id or 0)
             
             print(f"Retrieval Tool: Processing segment {segment_id} (run_id: {run_id})")
             

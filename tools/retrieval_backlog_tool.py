@@ -106,7 +106,6 @@ def create_retrieval_backlog_tool(run_id: str):
 
             # 1) Retrieval (returns JSON string)
             retrieval_json = retrieval_fn(
-                query_data=None,
                 segment_text=segment_text,
                 intent_labels=intent_labels,
                 dominant_intent=dominant_intent,
