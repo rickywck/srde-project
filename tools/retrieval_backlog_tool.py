@@ -24,25 +24,6 @@ from tools.retrieval_tool import create_retrieval_tool
 from agents.backlog_generation_agent import create_backlog_generation_agent
 
 
-def _safe_json_extract(text: Union[str, Dict[str, Any], List[Any]]) -> Dict[str, Any]:
-    if text is None:
-        return {}
-    if isinstance(text, (dict, list)):
-        return text  # already parsed
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    import re
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            return {}
-    return {}
-
-
 def _load_segment_from_file(run_id: str, segment_id: int, segments_file: Optional[str] = None) -> Dict[str, Any]:
     """Load a segment record from runs/<run_id>/segments.jsonl by id."""
     file_path = Path(segments_file) if segments_file else Path(f"runs/{run_id}/segments.jsonl")
@@ -75,7 +56,6 @@ def create_retrieval_backlog_tool(run_id: str):
 
     @tool
     def generate_backlog_with_retrieval(
-        segment_data: Union[str, Dict[str, Any]] = None,
         segment_id: Optional[int] = None,
         segment_text: Optional[str] = None,
         intent_labels: Optional[List[str]] = None,
@@ -95,7 +75,6 @@ def create_retrieval_backlog_tool(run_id: str):
         - intent_labels: list of intent labels (optional, can be inferred)
         - dominant_intent: dominant intent label (optional, can be inferred)
         - segments_file_path: optional override path to segments.jsonl
-        - segment_data: alternatively, pass all fields as a JSON object
 
         Output: JSON string with backlog generation summary (retrieval context is NOT included in output)
         
@@ -103,19 +82,10 @@ def create_retrieval_backlog_tool(run_id: str):
         - User uploaded document: Call with segment_id after segmentation
         - User typed requirements in chat: Call with segment_text directly (no segmentation needed)
         """
-        logger.debug("generate_backlog_with_retrieval called with: segment_data=%r, segment_id=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, segments_file_path=%r",
-                     segment_data, segment_id, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, segments_file_path)
+        logger.debug("generate_backlog_with_retrieval called with: segment_id=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, segments_file_path=%r",
+                     segment_id, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, segments_file_path)
         try:
-            # Parse json object if provided
-            if segment_data is not None and all(v is None for v in [segment_id, segment_text, intent_labels, dominant_intent]):
-                data = _safe_json_extract(segment_data)
-                segment_id = data.get("segment_id")
-                segment_text = data.get("segment_text")
-                intent_labels = data.get("intent_labels")
-                dominant_intent = data.get("dominant_intent")
-                segments_file = data.get("segments_file_path") or segments_file_path
-            else:
-                segments_file = segments_file_path
+            segments_file = segments_file_path
 
             # If no raw text provided, load from segments.jsonl using segment_id
             if (not segment_text) and segment_id is not None:
@@ -164,7 +134,6 @@ def create_retrieval_backlog_tool(run_id: str):
 
             # 2) Backlog generation (returns JSON string) — do NOT include retrieval payload in response
             gen_result_json = backlog_fn(
-                segment_data=None,
                 segment_id=seg_id,
                 segment_text=segment_text,
                 intent_labels=intent_labels,

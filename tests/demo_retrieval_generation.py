@@ -89,18 +89,16 @@ async def demo():
         
         # Generate backlog
         print("  → Generating backlog items...")
-        generation_data = json.dumps({
-            "segment_id": segment["segment_id"],
-            "segment_text": segment["raw_text"],
-            "intent_labels": segment["intent_labels"],
-            "dominant_intent": segment["dominant_intent"],
-            "retrieved_context": {
+        generation_result = json.loads(generation_agent(
+            segment_id=segment["segment_id"],
+            segment_text=segment["raw_text"],
+            intent_labels=segment["intent_labels"],
+            dominant_intent=segment["dominant_intent"],
+            retrieved_context={
                 "ado_items": retrieval_result.get("ado_items", []),
                 "architecture_constraints": retrieval_result.get("architecture_constraints", [])
             }
-        })
-        
-        generation_result = json.loads(generation_agent(generation_data))
+        ))
         
         items = generation_result.get("backlog_items", [])
         all_items.extend(items)

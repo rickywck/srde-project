@@ -138,13 +138,12 @@ class BacklogSynthesisWorkflow:
 
         for segment in segments:
             seg_id = segment["segment_id"]
-            payload = {
-                "segment_id": seg_id,
-                "segment_text": segment.get("raw_text", ""),
-                "intent_labels": segment.get("intent_labels", []),
-                "dominant_intent": segment.get("dominant_intent", "")
-            }
-            gen_json = combined_tool(json.dumps(payload))
+            gen_json = combined_tool(
+                segment_id=seg_id,
+                segment_text=segment.get("raw_text", ""),
+                intent_labels=segment.get("intent_labels", []),
+                dominant_intent=segment.get("dominant_intent", "")
+            )
             try:
                 generation_result = json.loads(gen_json)
             except Exception as e:

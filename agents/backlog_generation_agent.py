@@ -106,7 +106,6 @@ def create_backlog_generation_agent(run_id: str):
 
     @tool
     def generate_backlog(
-        segment_data: Union[str, Dict[str, Any]] = None,
         segment_id: int = None,
         segment_text: str = None,
         intent_labels: List[str] = None,
@@ -117,12 +116,11 @@ def create_backlog_generation_agent(run_id: str):
         Generate backlog items (epics, features, stories) from a segment with retrieved context.
         
         Args:
-            segment_data: JSON string containing:
-                - segment_id: The segment identifier
-                - segment_text: The original segment text
-                - intent_labels: List of intent labels
-                - dominant_intent: The dominant intent
-                - retrieved_context: Retrieved ADO items and architecture constraints
+            segment_id: The segment identifier
+            segment_text: The original segment text
+            intent_labels: List of intent labels
+            dominant_intent: The dominant intent
+            retrieved_context: Retrieved ADO items and architecture constraints
             
         Returns:
             JSON string containing generated backlog items (epics, features, stories)
@@ -132,29 +130,16 @@ def create_backlog_generation_agent(run_id: str):
         if retrieved_context:
             ado_count = len(retrieved_context.get("ado_items", []) or [])
             arch_count = len(retrieved_context.get("architecture_constraints", []) or [])
-        logger.debug("generate_backlog called with: run_id=%r, segment_data=%r, segment_id=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, ado_items=%d, arch_constraints=%d",
-                     run_id, segment_data, segment_id, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, ado_count, arch_count)
+        logger.debug("generate_backlog called with: run_id=%r, segment_id=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, ado_items=%d, arch_constraints=%d",
+                     run_id, segment_id, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, ado_count, arch_count)
 
         try:
-            # Parse input (support structured tool calls and legacy JSON string)
-            if segment_data is not None and (segment_id is None and segment_text is None):
-                # Accept dict (already structured) or JSON string strictly
-                if isinstance(segment_data, (dict, list)):
-                    data = segment_data
-                else:
-                    data = json.loads(segment_data)
-                segment_id = data.get("segment_id", 0)
-                segment_text = data.get("segment_text", "")
-                intent_labels = data.get("intent_labels", [])
-                dominant_intent = data.get("dominant_intent", "")
-                retrieved_context = data.get("retrieved_context", {})
-            else:
-                # Structured args path
-                segment_id = segment_id or 0
-                segment_text = segment_text or ""
-                intent_labels = intent_labels or []
-                dominant_intent = dominant_intent or ""
-                retrieved_context = retrieved_context or {}
+            # Normalize and validate inputs
+            segment_id = segment_id or 0
+            segment_text = segment_text or ""
+            intent_labels = intent_labels or []
+            dominant_intent = dominant_intent or ""
+            retrieved_context = retrieved_context or {}
             
             logger.info("Backlog Generation Agent: Processing segment %s (run_id: %s)", segment_id, run_id)
             

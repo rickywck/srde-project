@@ -51,7 +51,13 @@ def test_backlog_generation_with_synthetic_context(monkeypatch, tmp_path):
         },
     }
 
-    raw = tool(json.dumps(payload))
+    raw = tool(
+        segment_id=payload["segment_id"],
+        segment_text=payload["segment_text"],
+        intent_labels=payload["intent_labels"],
+        dominant_intent=payload["dominant_intent"],
+        retrieved_context=payload["retrieved_context"],
+    )
     res = json.loads(raw)
 
     assert res.get("status") in ("success", "success_mock")
