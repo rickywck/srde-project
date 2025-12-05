@@ -132,6 +132,9 @@ def create_evaluation_agent(run_id: str):
             })
             result = evaluate_backlog_quality(input_json)
         """
+        logger.debug("evaluate_backlog_quality called with: run_id=%r, input_json=%s...",
+                     run_id, input_json[:200] if input_json else None)
+        
         try:
             payload = json.loads(input_json)
         except json.JSONDecodeError as e:

@@ -81,6 +81,8 @@ def create_segmentation_agent(run_id: str):
         Returns:
             JSON string containing segmentation results with segment_id, raw_text, intent_labels, and dominant_intent
         """
+        logger.debug("segment_document called with: run_id=%r, document_text_length=%d, document_text_preview=%s...",
+                     run_id, len(document_text) if document_text else 0, document_text[:100] if document_text else None)
         
         # Build segmentation prompt from template
         segmentation_prompt = prompt_loader.format_user_prompt(

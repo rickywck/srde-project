@@ -127,6 +127,13 @@ def create_backlog_generation_agent(run_id: str):
         Returns:
             JSON string containing generated backlog items (epics, features, stories)
         """
+        ado_count = 0
+        arch_count = 0
+        if retrieved_context:
+            ado_count = len(retrieved_context.get("ado_items", []) or [])
+            arch_count = len(retrieved_context.get("architecture_constraints", []) or [])
+        logger.debug("generate_backlog called with: run_id=%r, segment_data=%r, segment_id=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, ado_items=%d, arch_constraints=%d",
+                     run_id, segment_data, segment_id, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, ado_count, arch_count)
 
         try:
             # Parse input (support structured tool calls and legacy JSON string)

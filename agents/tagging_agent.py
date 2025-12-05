@@ -88,14 +88,20 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         - The tool returns STRICT JSON ONLY (no markdown, no extra prose).
 
         Output contract (required fields in the structured response):
-                - `decision_tag`: "new"|"gap"|"duplicate"|"conflict"
-                - `related_ids`: list of most relevant existing `work_item_id` values
-                - `reason`: single short sentence (<= 20 words)
+        - `decision_tag`: "new"|"gap"|"duplicate"|"conflict"
+        - `related_ids`: list of most relevant existing `work_item_id` values
+        - `reason`: single short sentence (<= 20 words)
 
         Heuristics (informational): prefer `gap` over `duplicate` unless fully
         covered; use `conflict` for true contradictions or mutually exclusive
         directions.
         """
+        story_title = story.get('title', 'N/A') if story else None
+        desc = story.get('description', '') if story else ''
+        story_keys = list(story.keys()) if story else []
+        similar_count = len(similar_existing_stories) if similar_existing_stories else 0
+        logger.debug("tag_story called with: run_id=%r, story_data=%r, story_title=%r, story_description=%s..., story_keys=%r, similar_stories_count=%d, run_id_override=%r, backlog_path=%r",
+                     run_id, story_data, story_title, desc[:100] if desc else None, story_keys, similar_count, run_id_override, backlog_path)
 
         # Quick validation: if raw string provided, ensure it's JSON or a path
         if isinstance(story_data, str):

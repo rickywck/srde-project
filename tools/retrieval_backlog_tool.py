@@ -11,10 +11,14 @@ text and intents directly.
 
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from strands import tool
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 from tools.retrieval_tool import create_retrieval_tool
 from agents.backlog_generation_agent import create_backlog_generation_agent
@@ -99,6 +103,8 @@ def create_retrieval_backlog_tool(run_id: str):
         - User uploaded document: Call with segment_id after segmentation
         - User typed requirements in chat: Call with segment_text directly (no segmentation needed)
         """
+        logger.debug("generate_backlog_with_retrieval called with: segment_data=%r, segment_id=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, segments_file_path=%r",
+                     segment_data, segment_id, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, segments_file_path)
         try:
             # Parse json object if provided
             if segment_data is not None and all(v is None for v in [segment_id, segment_text, intent_labels, dominant_intent]):

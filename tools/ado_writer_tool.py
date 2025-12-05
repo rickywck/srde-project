@@ -30,11 +30,15 @@ import os
 import json
 import yaml
 import base64
+import logging
 import requests
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from strands import tool
 from dotenv import load_dotenv
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -393,6 +397,9 @@ def create_ado_writer_tool(run_id: str):
         Returns:
             JSON string with the result of the operation.
         """
+        logger.debug("write_to_ado called with: run_id=%r, params_json=%s...",
+                     run_id, params_json[:200] if params_json else None)
+        
         try:
             params = json.loads(params_json or "{}")
         except json.JSONDecodeError as e:

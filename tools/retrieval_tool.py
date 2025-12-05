@@ -5,10 +5,14 @@ Retrieval Tool - Tool for querying Pinecone for relevant context
 import os
 import json
 import yaml
+import logging
 from typing import Dict, Any, List, Union
 from openai import OpenAI
 from pinecone import Pinecone
 from strands import tool
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 
 def create_retrieval_tool(run_id: str):
@@ -116,6 +120,8 @@ def create_retrieval_tool(run_id: str):
         Returns:
             JSON string containing retrieved ADO items and architecture constraints
         """
+        logger.debug("retrieve_context called with: query_data=%r, segment_text=%s..., intent_labels=%r, dominant_intent=%r, segment_id=%r, run_id=%r",
+                     query_data, segment_text[:100] if segment_text else None, intent_labels, dominant_intent, segment_id, run_id)
         
         try:
             # Parse input (support structured and legacy string argument)
