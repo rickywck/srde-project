@@ -13,7 +13,8 @@ from strands.types.exceptions import StructuredOutputException
 
 from .prompt_loader import get_prompt_loader
 from .model_factory import ModelFactory
-from tools.token_utils import estimate_tokens
+from tools.utils.token_utils import estimate_tokens
+from .utils.backlog_helper import BacklogHelper
 
 logger = logging.getLogger(__name__)
 
@@ -217,18 +218,17 @@ def create_backlog_regeneration_agent(run_id: str, default_backlog_file: str | N
             return json.dumps(error, indent=2)
 
         backlog_items_models = validated.backlog_items
-        backlog_items: List[Dict[str, Any]] = []
+        raw_items: List[Dict[str, Any]] = []
         if hasattr(backlog_items_models, "__iter__"):
             for model_item in backlog_items_models:
                 try:
-                    serialized = (
+                    raw_items.append(
                         model_item.model_dump() if hasattr(model_item, "model_dump") else model_item.dict()
                     )
                 except Exception:
-                    serialized = dict(model_item)
-                backlog_items.append(serialized)
+                    raw_items.append(dict(model_item))
 
-        if not backlog_items:
+        if not raw_items:
             logger.warning("Backlog Regeneration Agent returned no items; existing backlog left untouched")
             summary = {
                 "status": "warning",
@@ -239,47 +239,15 @@ def create_backlog_regeneration_agent(run_id: str, default_backlog_file: str | N
             }
             return json.dumps(summary, indent=2)
 
-        # Assign IDs for traceability
-        counters = {"epic": 1, "feature": 1, "story": 1}
-        for item in backlog_items:
-            type_value = str(item.get("type", "story")).strip().lower()
-            if type_value in ("story", "user story", "user_story", "user-story"):
-                key = "story"
-                display_type = "User Story"
-            elif type_value in ("feature", "features"):
-                key = "feature"
-                display_type = "Feature"
-            elif type_value in ("epic", "epics"):
-                key = "epic"
-                display_type = "Epic"
-            else:
-                key = "story"
-                display_type = item.get("type", "User Story")
-            item["type"] = display_type
-            counter_val = counters.get(key)
-            if counter_val is not None:
-                item["internal_id"] = f"regen_{key}_{counter_val}"
-                counters[key] = counter_val + 1
-            item["run_id"] = run_id
+        # Normalize and annotate (regen id mode)
+        processed = BacklogHelper.normalize_items(raw_items, run_id=run_id, segment_id=None, id_mode="regen")
 
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(target_path, "w") as handle:
-            for entry in backlog_items:
-                handle.write(json.dumps(entry) + "\n")
+        # Overwrite file with new content
+        BacklogHelper.write_jsonl(processed, target_path, mode="w")
 
-        summary = {
-            "status": "success",
-            "run_id": run_id,
-            "segment_id": 0,
-            "items_generated": len(backlog_items),
-            "backlog_file": str(target_path),
-            "item_counts": {
-                "epics": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("epic", "epics")),
-                "features": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("feature", "features")),
-                "stories": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("story", "user story")),
-            },
-            "backlog_items": backlog_items,
-        }
+        summary = BacklogHelper.summarize(
+            run_id=run_id, backlog_file=target_path, items=processed, segment_id=0
+        )
         return json.dumps(summary, indent=2)
 
     return regenerate_backlog

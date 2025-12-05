@@ -24,7 +24,7 @@ from agents.evaluation_agent import create_evaluation_agent
 from agents.prompt_loader import get_prompt_loader
 from tools.retrieval_backlog_tool import create_retrieval_backlog_tool
 import base64
-from tools.token_utils import estimate_tokens
+from tools.utils.token_utils import estimate_tokens
 
 # Build Basic Auth header.
 LANGFUSE_AUTH = base64.b64encode(

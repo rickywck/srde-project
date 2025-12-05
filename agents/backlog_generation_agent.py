@@ -10,8 +10,9 @@ from pydantic import BaseModel, ValidationError
 from strands import tool, Agent
 from strands.types.exceptions import StructuredOutputException
 from .prompt_loader import get_prompt_loader
-from tools.token_utils import estimate_tokens
+from tools.utils.token_utils import estimate_tokens
 from .model_factory import ModelFactory
+from .utils.backlog_helper import BacklogHelper
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -239,72 +240,31 @@ def create_backlog_generation_agent(run_id: str):
                 return json.dumps(error_msg, indent=2)
 
             backlog_items_models = validated.backlog_items
-            # Convert to plain dicts for normalization / writing
-            backlog_items = []
+            # Convert to plain dicts
+            raw_items = []
             if hasattr(backlog_items_models, "__iter__"):
                 for m in backlog_items_models:
                     try:
-                        item_dict = m.model_dump() if hasattr(m, "model_dump") else m.dict()
+                        raw_items.append(m.model_dump() if hasattr(m, "model_dump") else m.dict())
                     except Exception:
-                        item_dict = dict(m)
-                    backlog_items.append(item_dict)
-            
-            # Assign internal IDs
-            item_counter = {"epic": 1, "feature": 1, "story": 1}
-            for item in backlog_items:
-                # Normalize type and keep counters consistent
-                orig_type = str(item.get("type", "story")).strip().lower()
-                if orig_type in ("story", "user story", "user_story", "user-story"):
-                    norm_key = "story"
-                elif orig_type in ("feature", "features"):
-                    norm_key = "feature"
-                elif orig_type in ("epic", "epics"):
-                    norm_key = "epic"
-                else:
-                    norm_key = orig_type
+                        raw_items.append(dict(m))
 
-                if norm_key == "story":
-                    display_type = "User Story"
-                elif norm_key == "feature":
-                    display_type = "Feature"
-                elif norm_key == "epic":
-                    display_type = "Epic"
-                else:
-                    display_type = item.get("type", "Story")
-                item["type"] = display_type
-                if norm_key in item_counter:
-                    item["internal_id"] = f"{norm_key}_{segment_id}_{item_counter[norm_key]}"
-                    item_counter[norm_key] += 1
-                item["segment_id"] = segment_id
-                item["run_id"] = run_id
-            
-            # Ensure output directory exists
+            # Normalize and annotate
+            processed = BacklogHelper.normalize_items(
+                raw_items, run_id=run_id, segment_id=segment_id, id_mode="segment"
+            )
+
+            # Persist
             output_dir = Path(f"runs/{run_id}")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Append to generated_backlog.jsonl
             backlog_file = output_dir / "generated_backlog.jsonl"
-            with open(backlog_file, "a") as f:
-                for item in backlog_items:
-                    f.write(json.dumps(item) + "\n")
-            
-            logger.info("Backlog Generation Agent: Generated %s backlog items", len(backlog_items))
-            
-            # Prepare summary
-            summary = {
-                "status": "success",
-                "run_id": run_id,
-                "segment_id": segment_id,
-                "items_generated": len(backlog_items),
-                "backlog_file": str(backlog_file),
-                "item_counts": {
-                    "epics": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("epic", "epics")),
-                    "features": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("feature", "features")),
-                    "stories": sum(1 for item in backlog_items if str(item.get("type", "")).lower() in ("story", "user story"))
-                },
-                "backlog_items": backlog_items
-            }
-            
+            BacklogHelper.write_jsonl(processed, backlog_file, mode="a")
+
+            logger.info("Backlog Generation Agent: Generated %s backlog items", len(processed))
+
+            # Summary
+            summary = BacklogHelper.summarize(
+                run_id=run_id, backlog_file=backlog_file, items=processed, segment_id=segment_id
+            )
             return json.dumps(summary, indent=2)
             
         except json.JSONDecodeError as e:
