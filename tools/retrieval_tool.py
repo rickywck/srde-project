@@ -1,5 +1,24 @@
 """
-Retrieval Tool - Tool for querying Pinecone for relevant context
+Retrieval Tool - Context Retrieval from Pinecone
+
+Purpose:
+- Query Pinecone vector store for relevant existing backlog items
+- Retrieve architecture constraints and requirements
+- Provide context for backlog generation and story tagging
+
+Inputs:
+- Segment text with intent labels
+- Query parameters (top_k, similarity threshold)
+
+Outputs:
+- Relevant ADO backlog items (Epics, Features, Stories)
+- Architecture constraints and technical requirements
+- Similarity scores and metadata
+
+Configuration:
+- Pinecone index and namespace from config
+- Embedding model: text-embedding-3-small
+- Minimum similarity threshold: configurable (default 0.5)
 """
 
 import os
@@ -111,13 +130,12 @@ def create_retrieval_tool(run_id: str):
             intent_labels = intent_labels or []
             dominant_intent = dominant_intent or ""
             segment_id = int(segment_id or 0)
-            
-            print(f"Retrieval Tool: Processing segment {segment_id} (run_id: {run_id})")
+            logger.info("Processing segment %s (run_id: %s)", segment_id, run_id)
             
             # Check if we have required clients
             if not openai_client or not pc:
                 warn = "Missing API keys for OpenAI or Pinecone; returning empty retrieval."
-                print(f"Retrieval Tool: {warn}")
+                logger.warning(warn)
                 fallback = {
                     "status": "success_no_api",
                     "run_id": run_id,
@@ -142,8 +160,8 @@ def create_retrieval_tool(run_id: str):
             # Combine dominant intent + intent labels + first ~300 chars of segment text
             intent_query_parts = [dominant_intent] + intent_labels
             intent_query = " ".join(intent_query_parts) + " " + segment_text[:300]
-            
-            print("Retrieval Tool: Generating embedding for intent query...")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Search query (intent_query): %s", intent_query)
             
             # Generate embedding
             embedding_response = openai_client.embeddings.create(
@@ -184,7 +202,7 @@ def create_retrieval_tool(run_id: str):
                 for match in _coerce_matches(res):
                     mid, mscore, mmeta = _coerce_fields(match)
                     if (mscore or 0) >= ado_min_similarity:
-                        items.append({
+                        item = {
                             "id": mid,
                             "score": mscore,
                             "type": mmeta.get("work_item_type", mmeta.get("type", "unknown")),
@@ -192,17 +210,17 @@ def create_retrieval_tool(run_id: str):
                             "description": (mmeta.get("description", "") or "")[:1000],
                             "acceptance_criteria": mmeta.get("acceptance_criteria"),
                             "work_item_id": mmeta.get("work_item_id")
-                        })
+                        }
+                        items.append(item)
+                        logger.debug(
+                            "ADO match retrieved: id=%s score=%s type=%s title=%s desc_snippet=%s",
+                            item.get("id"), item.get("score"), item.get("type"), item.get("title"), (item.get("description") or "")[:200]
+                        )
                 return items
 
-            print(f"Retrieval Tool: Querying Pinecone for ADO items... (namespace='{namespace or 'default'}')")
             ado_items = _query_ado()
-            if not ado_items:
-                print(f"Retrieval Tool: No ADO matches (doc_type='ado_backlog', threshold={ado_min_similarity}).")
+            logger.info("Found %s relevant ADO items", len(ado_items))
 
-            print(f"Retrieval Tool: Found {len(ado_items)} relevant ADO items")
-
-            print("Retrieval Tool: Querying Pinecone for architecture constraints...")
             arch_query_kwargs = {
                 "vector": query_vector,
                 "top_k": arch_top_k,
@@ -217,7 +235,7 @@ def create_retrieval_tool(run_id: str):
             for match in _coerce_matches(arch_results):
                 mid, mscore, mmeta = _coerce_fields(match)
                 if (mscore or 0) >= arch_min_similarity:
-                    architecture_items.append({
+                    arch_item = {
                         "id": mid,
                         "score": mscore,
                         "source": mmeta.get("file_name", mmeta.get("source", "")),
@@ -225,9 +243,14 @@ def create_retrieval_tool(run_id: str):
                         "section": mmeta.get("section", ""),
                         "project": mmeta.get("project"),
                         "chunk_index": mmeta.get("chunk_index")
-                    })
+                    }
+                    architecture_items.append(arch_item)
+                    logger.debug(
+                        "Architecture match retrieved: id=%s score=%s source=%s section=%s text_snippet=%s",
+                        arch_item.get("id"), arch_item.get("score"), arch_item.get("source"), arch_item.get("section"), (arch_item.get("text") or "")[:200]
+                    )
 
-            print(f"Retrieval Tool: Found {len(architecture_items)} relevant architecture constraints")
+            logger.info("Found %s relevant architecture constraints", len(architecture_items))
             
             # Build result
             result = {
@@ -253,6 +276,7 @@ def create_retrieval_tool(run_id: str):
         except json.JSONDecodeError as e:
             # Fail open: proceed with empty context but include warning
             warn = f"Failed to parse query_data JSON: {str(e)}"
+            logger.warning(warn)
             fallback = {
                 "status": "success",
                 "run_id": run_id,
@@ -272,6 +296,7 @@ def create_retrieval_tool(run_id: str):
         
         except Exception as e:
             # Fail open: proceed with empty context but include warning
+            logger.exception("Retrieval failed for run_id=%s segment_id=%s", run_id, segment_id)
             warn = f"Retrieval failed: {str(e)}"
             fallback = {
                 "status": "success",
@@ -296,26 +321,4 @@ def create_retrieval_tool(run_id: str):
 # Mock retrieval removed: callers must provide real API keys for production retrieval.
 
 
-# Documentation for retrieval tool
-RETRIEVAL_TOOL_DESCRIPTION = """
-Retrieval Tool - Context Retrieval from Pinecone
 
-Purpose:
-- Query Pinecone vector store for relevant existing backlog items
-- Retrieve architecture constraints and requirements
-- Provide context for backlog generation and story tagging
-
-Inputs:
-- Segment text with intent labels
-- Query parameters (top_k, similarity threshold)
-
-Outputs:
-- Relevant ADO backlog items (Epics, Features, Stories)
-- Architecture constraints and technical requirements
-- Similarity scores and metadata
-
-Configuration:
-- Pinecone index and namespace from config
-- Embedding model: text-embedding-3-small
-- Minimum similarity threshold: configurable (default 0.5)
-"""
