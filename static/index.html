@@ -475,6 +475,179 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+
+        .icon-btn.dashboard {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+            background: rgba(255,255,255,0.28);
+            border-color: rgba(255,255,255,0.55);
+        }
+
+        .icon-btn.dashboard.active {
+            background: rgba(255,255,255,0.45);
+            border-color: rgba(255,255,255,0.75);
+        }
+
+        .dashboard-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 18, 40, 0.45);
+            backdrop-filter: blur(2px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+            z-index: 900;
+        }
+
+        .dashboard-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .dashboard-panel {
+            position: fixed;
+            top: 50%;
+            right: 48px;
+            transform: translate(130%, -50%);
+            width: min(420px, 92vw);
+            max-height: 80vh;
+            background: rgba(14, 20, 42, 0.92);
+            border-radius: 22px;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 30px 90px rgba(8, 10, 30, 0.55);
+            color: #f7f8ff;
+            padding: 20px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 950;
+            transition: transform 0.33s ease;
+        }
+
+        .dashboard-panel.active {
+            transform: translate(0, -50%);
+        }
+
+        .dashboard-panel__header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .dashboard-title {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .dashboard-subtitle {
+            font-size: 12px;
+            color: rgba(255,255,255,0.7);
+            margin-top: 4px;
+        }
+
+        .dashboard-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .dashboard-action-btn {
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: #fff;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .dashboard-action-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .dashboard-content {
+            overflow-y: auto;
+            padding-right: 6px;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .dashboard-card {
+            background: linear-gradient(135deg, rgba(102,126,234,0.2), rgba(118,75,162,0.25));
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 12px;
+        }
+
+        .dashboard-card h4 {
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.6);
+            margin-bottom: 6px;
+        }
+
+        .dashboard-card strong {
+            font-size: 24px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .role-breakdown {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.8);
+        }
+
+        .tool-list {
+            list-style: none;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .tool-list li {
+            background: rgba(255,255,255,0.08);
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 11px;
+            border: 1px solid rgba(255,255,255,0.12);
+        }
+
+        .artifact-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 13px;
+        }
+
+        .dashboard-empty {
+            text-align: center;
+            padding: 40px 10px;
+            font-size: 13px;
+            color: rgba(255,255,255,0.75);
+        }
+
+        @media (max-width: 900px) {
+            .dashboard-panel {
+                right: 24px;
+                width: min(380px, 92vw);
+            }
+        }
     </style>
 </head>
 <body>
@@ -482,6 +655,7 @@
         <div class="header">
             <h1>🎯 Backlog Synthesizer</h1>
             <div class="header-controls">
+                <button class="icon-btn dashboard" id="dashboardBtn" title="Session insights">📊 Stats</button>
                 <button class="icon-btn" id="resetSessionBtn" title="Start new session">🔄 New</button>
                 <div class="run-id" id="runIdDisplay">No document loaded</div>
             </div>
@@ -558,6 +732,23 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=5"></script>
+    <div class="dashboard-overlay" id="dashboardOverlay"></div>
+    <div class="dashboard-panel" id="dashboardPanel" aria-live="polite">
+        <div class="dashboard-panel__header">
+            <div>
+                <div class="dashboard-title">Session Mini-Dashboard</div>
+                <div class="dashboard-subtitle" id="dashboardSubtitle">No session selected</div>
+            </div>
+            <div class="dashboard-actions">
+                <button class="dashboard-action-btn" id="dashboardRefreshBtn" title="Refresh stats">⟳</button>
+                <button class="dashboard-action-btn" id="dashboardCloseBtn" title="Close panel">✕</button>
+            </div>
+        </div>
+        <div class="dashboard-content" id="dashboardContent">
+            <div class="dashboard-empty">Select or start a run to see usage stats.</div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=6"></script>
 </body>
 </html>

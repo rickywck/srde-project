@@ -508,6 +508,18 @@ async def list_runs():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list runs: {str(e)}")
 
+
+@app.get("/session-dashboard/{run_id}")
+async def session_dashboard(run_id: str):
+    """Return session statistics for the supervisor mini-dashboard."""
+    try:
+        stats = supervisor.get_dashboard_snapshot(run_id)
+        return JSONResponse(content=stats)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to build dashboard: {str(e)}")
+
 # Mount static files for frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

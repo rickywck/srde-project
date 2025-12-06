@@ -4,6 +4,8 @@ let currentRunId = null;
 let isBusy = false;
 let chatAttachedDocument = null; // For chat-specific document upload
 let chatAttachedFileName = null;
+let dashboardLoading = false;
+let lastDashboardRunId = null;
 
 // DOM elements
 const chatMessages = document.getElementById('chatMessages');
@@ -19,6 +21,13 @@ const tokenInfo = document.getElementById('tokenInfo');
 const runsList = document.getElementById('runsList');
 const modelSelect = document.getElementById('modelSelect');
 const resetSessionBtn = document.getElementById('resetSessionBtn');
+const dashboardBtn = document.getElementById('dashboardBtn');
+const dashboardPanel = document.getElementById('dashboardPanel');
+const dashboardOverlay = document.getElementById('dashboardOverlay');
+const dashboardSubtitle = document.getElementById('dashboardSubtitle');
+const dashboardContent = document.getElementById('dashboardContent');
+const dashboardCloseBtn = document.getElementById('dashboardCloseBtn');
+const dashboardRefreshBtn = document.getElementById('dashboardRefreshBtn');
 
 // Chat document upload elements
 const attachBtn = document.getElementById('attachBtn');
@@ -159,6 +168,33 @@ function setupEventListeners() {
         }
     });
 
+    // Dashboard controls
+    if (dashboardBtn) {
+        dashboardBtn.addEventListener('click', () => {
+            if (isDashboardOpen()) {
+                closeDashboard();
+            } else {
+                openDashboard();
+            }
+        });
+    }
+    if (dashboardCloseBtn) {
+        dashboardCloseBtn.addEventListener('click', () => closeDashboard());
+    }
+    if (dashboardOverlay) {
+        dashboardOverlay.addEventListener('click', () => closeDashboard());
+    }
+    if (dashboardRefreshBtn) {
+        dashboardRefreshBtn.addEventListener('click', () => {
+            loadDashboardStats(true);
+        });
+    }
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && isDashboardOpen()) {
+            closeDashboard();
+        }
+    });
+
     // Reset session
     if (resetSessionBtn) {
         resetSessionBtn.addEventListener('click', () => {
@@ -242,6 +278,7 @@ async function handleFileUpload(file) {
         
         // Update UI
         runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
+        setDashboardSubtitleForCurrentRun();
         messageInput.disabled = false;
         sendBtn.disabled = false;
         attachBtn.disabled = false;
@@ -260,12 +297,14 @@ async function handleFileUpload(file) {
         
         // Refresh runs list
         await loadRuns();
+        refreshDashboardIfOpen({ forceRefresh: true });
         
     } catch (error) {
         console.error('Upload error:', error);
         addMessage('system', `❌ Upload failed: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
 }
 
@@ -376,6 +415,7 @@ async function adoExport(dryRun = true) {
         addMessage('system', `❌ ADO export error: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
 }
 
@@ -568,6 +608,8 @@ async function createEmptyRun() {
     
     // Update UI
     runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
+    setDashboardSubtitleForCurrentRun();
+    refreshDashboardIfOpen({ forceRefresh: true });
     
     // Note: Quick action buttons remain disabled until document is uploaded
     return runId;
@@ -612,6 +654,8 @@ function resetSession() {
 
     // Refresh runs list highlighting (new run not persisted until used)
     loadRuns();
+    setDashboardSubtitleForCurrentRun();
+    refreshDashboardIfOpen({ forceRefresh: true });
 }
 
 async function sendMessage() {
@@ -729,6 +773,7 @@ async function sendMessage() {
         addMessage('system', `❌ Error: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
 }
 
@@ -851,6 +896,7 @@ async function loadBacklog() {
         addMessage('system', `❌ Error loading backlog: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
 }
 
@@ -927,6 +973,7 @@ async function loadTagging() {
         addMessage('system', `❌ Error loading tagging: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
 }
 
@@ -973,6 +1020,7 @@ async function loadRuns() {
 async function loadRun(runId) {
     currentRunId = runId;
     runIdDisplay.textContent = `Run: ${runId.substring(0, 8)}...`;
+    setDashboardSubtitleForCurrentRun();
     
     messageInput.disabled = false;
     sendBtn.disabled = false;
@@ -987,6 +1035,7 @@ async function loadRun(runId) {
     
     // Update runs list highlighting
     await loadRuns();
+    refreshDashboardIfOpen({ forceRefresh: true });
 }
 
 async function generateBacklogWorkflow() {
@@ -1058,6 +1107,7 @@ async function generateBacklogWorkflow() {
         addMessage('system', `❌ Workflow failed: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
 }
 
@@ -1109,5 +1159,219 @@ async function evaluateQuality() {
         addMessage('system', `❌ Evaluation failed: ${error.message}`);
     } finally {
         setBusy(false);
+        refreshDashboardIfOpen({ forceRefresh: true });
     }
+}
+
+function isDashboardOpen() {
+    return dashboardPanel ? dashboardPanel.classList.contains('active') : false;
+}
+
+function openDashboard() {
+    if (!dashboardPanel) return;
+    dashboardPanel.classList.add('active');
+    if (dashboardOverlay) dashboardOverlay.classList.add('active');
+    if (dashboardBtn) dashboardBtn.classList.add('active');
+    if (!currentRunId) {
+        setDashboardSubtitle('No session selected');
+        renderDashboardEmpty('Start a run to view stats.');
+        return;
+    }
+    setDashboardSubtitle(`Run ${currentRunId.substring(0,8)} • loading…`);
+    loadDashboardStats();
+}
+
+function closeDashboard() {
+    if (!dashboardPanel) return;
+    dashboardPanel.classList.remove('active');
+    if (dashboardOverlay) dashboardOverlay.classList.remove('active');
+    if (dashboardBtn) dashboardBtn.classList.remove('active');
+}
+
+function setDashboardSubtitle(text) {
+    if (dashboardSubtitle) {
+        dashboardSubtitle.textContent = text;
+    }
+}
+
+function setDashboardSubtitleForCurrentRun(statusText) {
+    if (!dashboardSubtitle) return;
+    if (!currentRunId) {
+        dashboardSubtitle.textContent = statusText || 'No session selected';
+        return;
+    }
+    const shortId = currentRunId.substring(0, 8);
+    dashboardSubtitle.textContent = statusText ? `Run ${shortId} • ${statusText}` : `Run ${shortId} • live session`;
+}
+
+function renderDashboardEmpty(message) {
+    if (!dashboardContent) return;
+    dashboardContent.innerHTML = `<div class="dashboard-empty">${message}</div>`;
+}
+
+function renderDashboardLoading() {
+    if (!dashboardContent) return;
+    dashboardContent.innerHTML = `
+        <div class="dashboard-empty">
+            <span class="loading" style="width:18px;height:18px;border-width:2px;margin-right:8px;"></span>
+            Loading insights…
+        </div>
+    `;
+}
+
+async function loadDashboardStats(force = false) {
+    if (!dashboardPanel || !currentRunId) {
+        renderDashboardEmpty('Select a run to view stats.');
+        return;
+    }
+    if (dashboardLoading && !force) return;
+    if (!force && lastDashboardRunId === currentRunId) return;
+
+    dashboardLoading = true;
+    if (dashboardRefreshBtn) dashboardRefreshBtn.disabled = true;
+    renderDashboardLoading();
+
+    try {
+        const resp = await fetch(`/session-dashboard/${currentRunId}?t=${Date.now()}`);
+        if (!resp.ok) throw new Error('Failed to load dashboard');
+        const data = await resp.json();
+        lastDashboardRunId = currentRunId;
+        renderDashboard(data);
+    } catch (error) {
+        console.error('Dashboard load error:', error);
+        renderDashboardEmpty('Unable to load stats right now.');
+    } finally {
+        dashboardLoading = false;
+        if (dashboardRefreshBtn) dashboardRefreshBtn.disabled = false;
+    }
+}
+
+function renderDashboard(data) {
+    if (!dashboardContent || !data) return;
+    const conversation = data.conversation || {};
+    const artifacts = data.artifacts || {};
+    const sessionState = data.session_state || {};
+    const toolUsage = conversation.tool_usage || [];
+    const backlogItems = artifacts.backlog_items || 0;
+    const taggingItems = artifacts.tagging_items || 0;
+    const adoInfo = artifacts.ado_export || {};
+    const evalCount = artifacts.evaluation_runs || 0;
+
+    const modelLabel = data.model_id || localStorage.getItem('openai_model') || 'default model';
+    const shortId = (data.run_id || currentRunId || '').substring(0,8);
+    setDashboardSubtitle(`Run ${shortId} • ${modelLabel}`);
+
+    dashboardContent.innerHTML = `
+        <div class="dashboard-grid">
+            <div class="dashboard-card">
+                <h4>Total Messages</h4>
+                <strong>${formatInteger(conversation.total_messages)}</strong>
+                <div class="role-breakdown">${buildRoleBreakdown(conversation.by_role)}</div>
+            </div>
+            <div class="dashboard-card">
+                <h4>Token Estimate</h4>
+                <strong>${formatInteger(conversation.token_estimate)}</strong>
+                <div class="role-breakdown"><span>Approximate tokens exchanged</span></div>
+            </div>
+            <div class="dashboard-card">
+                <h4>Artifacts</h4>
+                <strong>${formatInteger(backlogItems)}</strong>
+                <div class="role-breakdown">
+                    <div>Stories tagged: <strong>${formatInteger(taggingItems)}</strong></div>
+                    <div>Evaluations: <strong>${formatInteger(evalCount)}</strong></div>
+                </div>
+            </div>
+        </div>
+        <div class="dashboard-card">
+            <h4>Last Exchange</h4>
+            <div class="role-breakdown">
+                <div>${formatRole(conversation.last_message_role)} • ${formatTimestamp(conversation.last_message_at)}</div>
+                <div>${conversation.last_message_preview || 'No messages yet.'}</div>
+            </div>
+        </div>
+        <div class="dashboard-card">
+            <h4>Tool Usage</h4>
+            ${buildToolList(toolUsage)}
+        </div>
+        <div class="dashboard-card">
+            <h4>ADO Export State</h4>
+            <div class="artifact-list">${buildAdoSummary(adoInfo)}</div>
+        </div>
+        <div class="dashboard-card">
+            <h4>Session Health</h4>
+            <div class="artifact-list">
+                <div>Conversation manager: <strong>${sessionState.conversation_manager || 'SlidingWindow'}</strong></div>
+                <div>Trimmed turns: <strong>${formatInteger(sessionState.removed_message_count)}</strong></div>
+                <div>Started: <strong>${formatTimestamp(sessionState.session_created_at)}</strong></div>
+                <div>Updated: <strong>${formatTimestamp(sessionState.session_updated_at)}</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+function buildRoleBreakdown(byRole = {}) {
+    const entries = Object.entries(byRole || {});
+    if (!entries.length) return '<span>No turns yet.</span>';
+    return entries.map(([role, count]) => `<div>${formatRole(role)} <strong>${formatInteger(count)}</strong></div>`).join('');
+}
+
+function buildToolList(toolUsage) {
+    if (!toolUsage || toolUsage.length === 0) {
+        return '<div class="role-breakdown">No structured tool calls yet.</div>';
+    }
+    const chips = toolUsage.slice(0, 6).map(tool => `<li>${tool.name} · ${formatInteger(tool.count)}</li>`).join('');
+    return `<ul class="tool-list">${chips}</ul>`;
+}
+
+function buildAdoSummary(info = {}) {
+    if (!info.has_export) {
+        return '<div>No exports recorded.</div>';
+    }
+    const lines = [];
+    if (info.status) lines.push(`Status: <strong>${info.status}</strong>`);
+    if (info.mode) lines.push(`Mode: <strong>${info.mode}</strong>`);
+    if (info.updated_at) lines.push(`Updated: <strong>${formatTimestamp(info.updated_at)}</strong>`);
+    if (info.counts && Object.keys(info.counts).length) {
+        const summary = Object.entries(info.counts).map(([k,v]) => `${k}: ${formatInteger(v)}`).join(' • ');
+        lines.push(`Items: <strong>${summary}</strong>`);
+    }
+    return lines.map(line => `<div>${line}</div>`).join('');
+}
+
+function formatRole(role) {
+    if (!role) return '—';
+    switch (role) {
+        case 'user': return '🙋 User';
+        case 'assistant': return '🤖 Assistant';
+        case 'system': return '🛠️ System';
+        default: return role;
+    }
+}
+
+function formatTimestamp(value) {
+    if (!value) return 'n/a';
+    try {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toLocaleString();
+    } catch (_) {
+        return value;
+    }
+}
+
+function formatInteger(value) {
+    const num = Number(value || 0);
+    if (Number.isNaN(num)) return '0';
+    return num.toLocaleString();
+}
+
+function refreshDashboardIfOpen(options = {}) {
+    if (!isDashboardOpen()) return;
+    if (!currentRunId) {
+        setDashboardSubtitle('No session selected');
+        renderDashboardEmpty('Start a run to view stats.');
+        return;
+    }
+    const force = Boolean(options.forceRefresh);
+    loadDashboardStats(force);
 }

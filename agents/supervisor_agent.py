@@ -257,6 +257,13 @@ class SupervisorAgent:
             return agent.messages
         return None
 
+    def get_dashboard_snapshot(self, run_id: str) -> Dict[str, Any]:
+        """Return aggregated stats for the active supervisor session."""
+        helper = SupervisorRunHelper(self.logger)
+        agent = self.agents_cache.get(run_id)
+        model_id = self.agent_models.get(run_id)
+        return helper.build_dashboard(run_id, self.sessions_dir, model_id, agent)
+
     def clear_session(self, run_id: str):
         """Remove agent from cache and optionally delete session files"""
         if run_id in self.agents_cache:
