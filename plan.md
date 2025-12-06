@@ -70,7 +70,8 @@ graph TB
 - **Segmentation Agent**: Splits documents into coherent segments and identifies intents.
 - **Retrieval Tool**: Tool invoked by Supervisor to search Pinecone for relevant ADO backlog items and architecture constraints.
 - **Backlog Generation Agent**: Creates epics, features, and user stories from segments with retrieved context.
-- **Tagging Agent**: Classifies generated stories relative to existing backlog (new/gap/conflict).
+- **Backlog Regeneration Agent**: Updates existing backlog items based on user instructions (e.g., "Make story X more detailed").
+- **Tagging Agent**: Classifies generated stories relative to existing backlog (new/gap/conflict/duplicate).
 - **Evaluation Agent**: LLM-as-a-judge that evaluates quality of generated backlog items across multiple dimensions (completeness, relevance, quality).
 - **ADO Writer Tool**: Optional tool invoked by Supervisor to persist items to Azure DevOps.
 
@@ -97,6 +98,7 @@ Components (kept from full design, simplified behavior):
 - **Segmentation Agent:** Single LLM call to segment document + label intents.
 - **Supervisor:** Orchestrates segmentation, retrieval, generation, tagging, and evaluation.
 - **Backlog Generation Agent:** LLM that takes one segment + retrieved context and outputs epics/features/stories.
+- **Backlog Regeneration Agent:** LLM that updates existing backlog items based on user feedback.
 - **Retrieval Backlog Tool:** Combined tool that orchestrates retrieval and generation (primary entry point).
 - **Tagging Agent:** LLM that takes one generated user story + retrieved existing stories and outputs a tag.
 - **Evaluation Agent:** LLM-as-a-judge that evaluates generated backlog quality across multiple dimensions.
@@ -264,6 +266,17 @@ POC simplifications:
 - No retries beyond one optional re-call if JSON invalid.
 - No constraint violation flags or AC delta computation (can be added later).
 
+### 6.5 Backlog Regeneration
+
+The **Backlog Regeneration Agent** allows users to refine generated items via chat.
+
+- **Input:** User instructions (e.g., "Add acceptance criteria for security to story #5") + existing backlog items.
+- **Behavior:**
+  - Loads current backlog from disk.
+  - Applies user instructions to modify/add/remove items.
+  - Overwrites the backlog file with updated content.
+- **Output:** Updated `generated_backlog.jsonl`.
+
 ---
 ## 7. Per-Story Retrieval & Tagging (Simplified)
 
@@ -306,7 +319,7 @@ Supervisor:
 POC simplifications:
 - Threshold filtering happens before LLM call (see 7.2 early exit).
 - LLM only reasons over stories that are sufficiently similar.
-- Only three tag values: `new` (no similar stories), `gap` (fills a gap or extends existing work), `conflict` (contradicts existing stories).
+- Four tag values: `new` (no similar stories), `gap` (fills a gap or extends existing work), `duplicate` (already covered), `conflict` (contradicts existing stories).
 
 The tagging output produced here is the main input to the simple evaluation in Section 9.
 
@@ -528,6 +541,7 @@ You are an expert product manager and backlog quality evaluator. Evaluate the ge
 ### Existing ADO Items:
 {retrieved_ado_items}
 
+
 ### 9.3 Combined Evaluation Report
 
 A summary script `evaluate/generate_eval_report.py` combines both evaluation results:
@@ -561,62 +575,6 @@ This separation ensures the evaluation logic is:
 - **Testable** in isolation
 - **Reusable** for different workflows (e.g., per-segment evaluation vs. bulk assessment)
 - **Observable** through standard Strands telemetry
-2. Relevance: Are items relevant without hallucinations?
-3. Quality: Are titles, descriptions, and ACs well-written?
-
-Provide scores, reasoning, and actionable suggestions for improvement.
-
-Return JSON matching this schema:
-{evaluation_schema}
-```
-
-#### 9.2.4 Supervisor Integration
-
-The Supervisor can invoke the Evaluation Agent when:
-- User explicitly requests: "Evaluate the quality of generated items", "How good are these stories?"
-- User asks for feedback: "What could be improved?", "Are there any quality issues?"
-- Automated evaluation is enabled in config (for CI/CD validation)
-- During batch evaluation runs for system testing
-
-The agent invocation is logged and results are displayed in the chat interface with color-coded scores and actionable suggestions.
-
-#### 9.2.5 Batch Evaluation Dataset
-
-For batch/offline evaluation, store test cases at `datasets/eval_dataset.json` with records:
-- **Input:**
-  - `segment_text`: The original meeting note segment
-  - `retrieved_context`: Snapshot of ADO items and architecture constraints provided to generation agent
-- **Generated output:**
-  - `generated_backlog`: List of generated epics/features/stories with full details
-- **Reference (optional):**
-  - `reference_backlog`: Optional human-created backlog items for comparison
-  - `expected_score_range`: Optional guidance for validation
-
-#### 9.2.6 Batch Evaluation Script
-
-CLI script `evaluate/evaluate_backlog_generation.py`:
-1. Loads `datasets/eval_dataset.json`
-2. For each test case, invokes Evaluation Agent in batch mode
-3. Collects all evaluation results
-4. Aggregates scores across all test cases:
-   - Per-dimension averages and distributions
-   - Overall average score
-   - Detailed per-case breakdowns
-   - Common issues and patterns identified
-5. Writes comprehensive report to `eval/backlog_generation_judge.json`
-6. Optionally displays summary in terminal with visual charts
-Provide scores, reasoning, and actionable suggestions for improvement.
-```
-
-### 9.3 Combined Evaluation Report
-
-A summary script `generate_eval_report.py` combines both evaluation results:
-- Tagging accuracy metrics (precision/recall/F1)
-- Backlog generation quality scores (LLM judge)
-- Overall system effectiveness assessment
-- Recommendations for prompt tuning or architecture changes
-
-This dual evaluation approach provides both **objective metrics** (tagging accuracy) and **holistic quality assessment** (LLM judge) to validate the POC's effectiveness.
 
 ---
 ## 10. Minimal Configuration
