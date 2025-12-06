@@ -5,6 +5,16 @@ from pathlib import Path
 from typing import Any, Dict, Optional, List
 import logging
 
+try:
+    from strands.agent.agent import Agent as StrandsAgent
+except Exception:  # pragma: no cover - fallback when package unavailable
+    StrandsAgent = None  # type: ignore
+
+try:
+    from strands.tools.decorator import DecoratedFunctionTool
+except Exception:  # pragma: no cover - fallback when decorator unavailable
+    DecoratedFunctionTool = None  # type: ignore
+
 from tools.utils.token_utils import estimate_tokens
 from agents.tagging_agent import create_tagging_agent
 
@@ -165,6 +175,20 @@ class SupervisorRunHelper:
             sources = [repo_data.get("source") or "unknown"]
 
         artifacts = self._collect_artifacts(run_id)
+        sub_agents = self._collect_sub_agent_stats(agent, run_id, sessions_dir)
+
+        agent_entries = [
+            {
+                "id": "supervisor",
+                "label": "Supervisor",
+                "type": "supervisor",
+                "tool_name": None,
+                "available": bool((conversation or {}).get("total_messages")),
+                "source": sources,
+                "summary": conversation or {},
+            }
+        ]
+        agent_entries.extend(sub_agents)
 
         return {
             "run_id": run_id,
@@ -174,8 +198,156 @@ class SupervisorRunHelper:
             "sources": {
                 "conversation": sources
             },
-            "artifacts": artifacts
+            "artifacts": artifacts,
+            "agents": agent_entries
         }
+
+    def _collect_sub_agent_stats(self, supervisor_agent: Any, run_id: str, sessions_dir: str) -> List[Dict[str, Any]]:
+        """Summarize Agent-as-Tool children (memory + session repo + tool-usage fallback)."""
+
+        if not supervisor_agent:
+            return []
+
+        tools_by_name = self._get_tool_registry(supervisor_agent)
+        if not tools_by_name:
+            return []
+
+        # Supervisor tool usage (fallback when sub-agent has no messages)
+        sup_conv = self._summarize_in_memory_messages(supervisor_agent) or {}
+        usage_map = {u.get("name"): int(u.get("count", 0)) for u in (sup_conv.get("tool_usage") or [])}
+
+        # Start with in-memory summaries where available
+        entries: Dict[str, Dict[str, Any]] = {}
+        for tool_name, tool in tools_by_name.items():
+            embedded_agent = self._extract_agent_from_tool(tool)
+            inmem = self._summarize_in_memory_messages(embedded_agent) if embedded_agent else {}
+            entries[tool_name] = {
+                "id": tool_name,
+                "label": self._prettify_tool_name(tool_name),
+                "type": "tool",
+                "tool_name": tool_name,
+                "available": bool(inmem.get("total_messages")),
+                "source": (["agent_cache"] if inmem.get("total_messages") else []),
+                "summary": inmem or {},
+            }
+
+        # Merge with repository summaries if present (some tools may persist under agents/agent_*)
+        repo_map = self._list_repo_agent_summaries(run_id, sessions_dir)
+        norm_tools = {self._normalize_name(name): name for name in tools_by_name.keys()}
+        for repo_key, repo_info in repo_map.items():
+            norm = self._normalize_name(repo_key)
+            if norm not in norm_tools:
+                # Attempt label-based normalization too
+                alt_norm = self._normalize_name(repo_info.get("label"))
+                if alt_norm in norm_tools:
+                    norm = alt_norm
+                else:
+                    continue
+            tool_name = norm_tools[norm]
+            repo_summary = repo_info.get("summary") or {}
+            if not repo_summary:
+                continue
+            current = entries.get(tool_name)
+            if not current:
+                entries[tool_name] = {
+                    "id": tool_name,
+                    "label": self._prettify_tool_name(tool_name),
+                    "type": "tool",
+                    "tool_name": tool_name,
+                    "available": bool(repo_summary.get("total_messages")),
+                    "source": ["session_repository"],
+                    "summary": repo_summary,
+                }
+            else:
+                # Prefer the richer of the two summaries; combine sources
+                combined_sources = list({*(current.get("source") or []), "session_repository"})
+                better = repo_summary if (repo_summary.get("total_messages", 0) >= current["summary"].get("total_messages", 0)) else current["summary"]
+                current.update({
+                    "available": current.get("available") or bool(repo_summary.get("total_messages")),
+                    "source": combined_sources,
+                    "summary": better,
+                })
+
+        # Fallback: if still no summary, synthesize from supervisor's tool usage counts
+        for tool_name in tools_by_name.keys():
+            ent = entries.get(tool_name)
+            if not ent:
+                ent = {
+                    "id": tool_name,
+                    "label": self._prettify_tool_name(tool_name),
+                    "type": "tool",
+                    "tool_name": tool_name,
+                    "available": False,
+                    "source": [],
+                    "summary": {},
+                }
+                entries[tool_name] = ent
+            if not ent.get("summary"):
+                count = int(usage_map.get(tool_name, 0))
+                if count > 0:
+                    ent["available"] = True
+                    ent["source"] = list({*(ent.get("source") or []), "supervisor_usage"})
+                    ent["summary"] = {
+                        "total_messages": count,
+                        "by_role": {"assistant": count},
+                        "last_message_role": None,
+                        "last_message_at": None,
+                        "last_message_preview": None,
+                        "tool_usage": [{"name": tool_name, "count": count}],
+                        "token_estimate": 0,
+                    }
+
+        return list(entries.values())
+
+    def _get_tool_registry(self, supervisor_agent: Any) -> Dict[str, Any]:
+        """Return mapping of tool_name -> tool object using registry or fallback to .tools list."""
+        tool_registry = getattr(supervisor_agent, "tool_registry", None)
+        if tool_registry is not None:
+            registry = getattr(tool_registry, "registry", None)
+            if isinstance(registry, dict) and registry:
+                return dict(registry)
+        # Fallback to list on agent
+        tools = getattr(supervisor_agent, "tools", None)
+        if isinstance(tools, list) and tools:
+            out: Dict[str, Any] = {}
+            for t in tools:
+                name = self._get_tool_name(t)
+                if name:
+                    out[name] = t
+            return out
+        return {}
+
+    def _get_tool_name(self, tool: Any) -> Optional[str]:
+        for attr in ("tool_name", "name", "_name"):
+            val = getattr(tool, attr, None)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        func = getattr(tool, "_tool_func", None) or getattr(tool, "func", None)
+        if getattr(func, "__name__", None):
+            return str(func.__name__)
+        return None
+
+    def _normalize_name(self, name: Optional[str]) -> str:
+        if not name:
+            return ""
+        return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+    def _list_repo_agent_summaries(self, run_id: str, sessions_dir: str) -> Dict[str, Dict[str, Any]]:
+        """Scan session repo for per-agent messages and build summaries keyed by name/label."""
+        base = Path(sessions_dir) / f"session_{run_id}" / "agents"
+        if not base.exists():
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for agent_dir in sorted(base.glob("agent_*")):
+            meta = self._load_json(agent_dir / "agent.json") or {}
+            key = meta.get("tool_name") or meta.get("name") or agent_dir.name.replace("agent_", "")
+            label = meta.get("name") or key
+            messages = self._collect_messages_from_repo(agent_dir / "messages")
+            if not messages:
+                continue
+            summary = self._summarize_messages(messages)
+            out[key] = {"label": self._prettify_tool_name(label), "summary": summary}
+        return out
 
     def _summarize_in_memory_messages(self, agent: Any) -> Dict[str, Any]:
         messages = getattr(agent, "messages", None)
@@ -397,6 +569,41 @@ class SupervisorRunHelper:
             "updated_at": data.get("timestamp") or data.get("exported_at") or data.get("updated_at")
         })
         return ado_info
+
+    def _extract_agent_from_tool(self, tool: Any) -> Optional[Any]:
+        """Attempt to locate the Strands Agent embedded inside a DecoratedFunctionTool."""
+
+        if not tool:
+            return None
+
+        func = getattr(tool, "_tool_func", None)
+        closure = getattr(func, "__closure__", None)
+        if not closure:
+            return None
+
+        for cell in closure:
+            try:
+                candidate = cell.cell_contents
+            except Exception:
+                continue
+            if self._looks_like_agent(candidate):
+                return candidate
+        return None
+
+    def _looks_like_agent(self, candidate: Any) -> bool:
+        if candidate is None:
+            return False
+        if StrandsAgent is not None and isinstance(candidate, StrandsAgent):
+            return True
+        return hasattr(candidate, "messages") and hasattr(candidate, "tool_registry")
+
+    def _prettify_tool_name(self, tool_name: Optional[str]) -> str:
+        if not tool_name:
+            return "Tool"
+        normalized = tool_name.replace("_", " ").replace("-", " ").strip()
+        if not normalized:
+            return tool_name
+        return normalized.title()
 
     def _count_jsonl(self, path: Path) -> Optional[int]:
         if not path.exists():

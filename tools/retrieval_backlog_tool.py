@@ -40,7 +40,7 @@ def _load_segment_from_file(run_id: str, segment_id: int, segments_file: Optiona
     raise ValueError(f"Segment with id {segment_id} not found in {file_path}")
 
 
-def create_retrieval_backlog_tool(run_id: str):
+def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None):
     """
     Factory to create the combined retrieval + backlog generation tool for a run.
 
@@ -52,7 +52,8 @@ def create_retrieval_backlog_tool(run_id: str):
     """
 
     retrieval_fn = create_retrieval_tool(run_id)
-    backlog_fn = create_backlog_generation_agent(run_id)
+    # Optionally reuse a factory-scoped backlog generation tool/function if provided
+    backlog_fn = backlog_fn or create_backlog_generation_agent(run_id)
 
     @tool
     def generate_backlog_with_retrieval(

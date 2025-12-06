@@ -62,6 +62,16 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         model = None
         model_id = ModelFactory.get_default_model_id()
 
+    # Instantiate a Strands Agent at factory scope (long-lived within supervisor runtime)
+    tagging_agent_instance = None
+    if model is not None:
+        try:
+            tagging_agent_instance = Agent(model=model, system_prompt=system_prompt)
+            logger.debug("Tagging Agent instance created at factory scope")
+        except Exception as e:
+            logger.exception("Failed to instantiate Tagging Agent at factory scope: %s", e)
+            tagging_agent_instance = None
+
     @tool
     def tag_story(
         story_data: Any = None,
@@ -270,7 +280,8 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 return result
 
             try:
-                agent = Agent(model=model, system_prompt=system_prompt)
+                # Use long-lived agent instance when available; else create ad-hoc
+                agent = tagging_agent_instance or Agent(model=model, system_prompt=system_prompt)
                 result_obj = agent(
                     user_prompt,
                     structured_output_model=TaggingDecisionOut,

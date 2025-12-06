@@ -6,6 +6,8 @@ let chatAttachedDocument = null; // For chat-specific document upload
 let chatAttachedFileName = null;
 let dashboardLoading = false;
 let lastDashboardRunId = null;
+let selectedDashboardAgentId = 'supervisor';
+let lastDashboardData = null;
 
 // DOM elements
 const chatMessages = document.getElementById('chatMessages');
@@ -275,6 +277,7 @@ async function handleFileUpload(file) {
         
         const data = await response.json();
         currentRunId = data.run_id;
+        resetDashboardAgentState();
         
         // Update UI
         runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
@@ -605,6 +608,7 @@ async function createEmptyRun() {
     // Create a new run without uploading a document
     const runId = generateRunId();
     currentRunId = runId;
+    resetDashboardAgentState();
     
     // Update UI
     runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
@@ -627,6 +631,7 @@ function generateRunId() {
 function resetSession() {
     // Create a fresh run id and clear UI state
     currentRunId = generateRunId();
+    resetDashboardAgentState();
     try { sessionStorage.setItem('currentRunId', currentRunId); } catch (_) {}
     runIdDisplay.textContent = `Run: ${currentRunId.substring(0, 8)}...`;
 
@@ -1019,6 +1024,7 @@ async function loadRuns() {
 
 async function loadRun(runId) {
     currentRunId = runId;
+    resetDashboardAgentState();
     runIdDisplay.textContent = `Run: ${runId.substring(0, 8)}...`;
     setDashboardSubtitleForCurrentRun();
     
@@ -1194,6 +1200,12 @@ function setDashboardSubtitle(text) {
     }
 }
 
+function resetDashboardAgentState() {
+    selectedDashboardAgentId = 'supervisor';
+    lastDashboardData = null;
+    lastDashboardRunId = null;
+}
+
 function setDashboardSubtitleForCurrentRun(statusText) {
     if (!dashboardSubtitle) return;
     if (!currentRunId) {
@@ -1206,6 +1218,7 @@ function setDashboardSubtitleForCurrentRun(statusText) {
 
 function renderDashboardEmpty(message) {
     if (!dashboardContent) return;
+    lastDashboardData = null;
     dashboardContent.innerHTML = `<div class="dashboard-empty">${message}</div>`;
 }
 
@@ -1248,7 +1261,25 @@ async function loadDashboardStats(force = false) {
 
 function renderDashboard(data) {
     if (!dashboardContent || !data) return;
-    const conversation = data.conversation || {};
+    lastDashboardData = data;
+
+    const agents = normalizeDashboardAgents(data);
+    if (!agents.length) {
+        renderDashboardEmpty('No stats available for this session yet.');
+        return;
+    }
+
+    const agentMap = {};
+    agents.forEach(agent => {
+        agentMap[agent.id] = agent;
+    });
+
+    if (!agentMap[selectedDashboardAgentId]) {
+        selectedDashboardAgentId = agents[0].id;
+    }
+
+    const selectedAgent = agentMap[selectedDashboardAgentId] || agents[0];
+    const conversation = selectedAgent.summary || {};
     const artifacts = data.artifacts || {};
     const sessionState = data.session_state || {};
     const toolUsage = conversation.tool_usage || [];
@@ -1259,20 +1290,28 @@ function renderDashboard(data) {
 
     const modelLabel = data.model_id || localStorage.getItem('openai_model') || 'default model';
     const shortId = (data.run_id || currentRunId || '').substring(0,8);
-    setDashboardSubtitle(`Run ${shortId} • ${modelLabel}`);
+    const subtitle = selectedAgent.type === 'supervisor'
+        ? `Run ${shortId} • ${modelLabel}`
+        : `Run ${shortId} • ${modelLabel} • ${selectedAgent.label}`;
+    setDashboardSubtitle(subtitle);
 
-    dashboardContent.innerHTML = `
-        <div class="dashboard-grid">
-            <div class="dashboard-card">
-                <h4>Total Messages</h4>
-                <strong>${formatInteger(conversation.total_messages)}</strong>
-                <div class="role-breakdown">${buildRoleBreakdown(conversation.by_role)}</div>
-            </div>
-            <div class="dashboard-card">
-                <h4>Token Estimate</h4>
-                <strong>${formatInteger(conversation.token_estimate)}</strong>
-                <div class="role-breakdown"><span>Approximate tokens exchanged</span></div>
-            </div>
+    const selectorHtml = buildAgentSelectorHtml(agents, selectedDashboardAgentId);
+    const messagesCard = `
+        <div class="dashboard-card">
+            <h4>Total Messages</h4>
+            <strong>${formatInteger(conversation.total_messages)}</strong>
+            <div class="role-breakdown">${buildRoleBreakdown(conversation.by_role)}</div>
+        </div>
+    `;
+    const tokenCard = `
+        <div class="dashboard-card">
+            <h4>Token Estimate</h4>
+            <strong>${formatInteger(conversation.token_estimate)}</strong>
+            <div class="role-breakdown"><span>Approximate tokens exchanged</span></div>
+        </div>
+    `;
+    const thirdCard = selectedAgent.type === 'supervisor'
+        ? `
             <div class="dashboard-card">
                 <h4>Artifacts</h4>
                 <strong>${formatInteger(backlogItems)}</strong>
@@ -1281,6 +1320,38 @@ function renderDashboard(data) {
                     <div>Evaluations: <strong>${formatInteger(evalCount)}</strong></div>
                 </div>
             </div>
+        `
+        : buildAgentActivityCard(conversation.by_role);
+
+    let supplementalHtml = '';
+    if (selectedAgent.type === 'supervisor') {
+        supplementalHtml += `
+            <div class="dashboard-card">
+                <h4>ADO Export State</h4>
+                <div class="artifact-list">${buildAdoSummary(adoInfo)}</div>
+            </div>
+        `;
+        supplementalHtml += `
+            <div class="dashboard-card">
+                <h4>Session Health</h4>
+                <div class="artifact-list">
+                    <div>Conversation manager: <strong>${sessionState.conversation_manager || 'SlidingWindow'}</strong></div>
+                    <div>Trimmed turns: <strong>${formatInteger(sessionState.removed_message_count)}</strong></div>
+                    <div>Started: <strong>${formatTimestamp(sessionState.session_created_at)}</strong></div>
+                    <div>Updated: <strong>${formatTimestamp(sessionState.session_updated_at)}</strong></div>
+                </div>
+            </div>
+        `;
+    } else {
+        supplementalHtml += buildAgentContextCard(selectedAgent);
+    }
+
+    dashboardContent.innerHTML = `
+        ${selectorHtml}
+        <div class="dashboard-grid">
+            ${messagesCard}
+            ${tokenCard}
+            ${thirdCard}
         </div>
         <div class="dashboard-card">
             <h4>Last Exchange</h4>
@@ -1293,20 +1364,17 @@ function renderDashboard(data) {
             <h4>Tool Usage</h4>
             ${buildToolList(toolUsage)}
         </div>
-        <div class="dashboard-card">
-            <h4>ADO Export State</h4>
-            <div class="artifact-list">${buildAdoSummary(adoInfo)}</div>
-        </div>
-        <div class="dashboard-card">
-            <h4>Session Health</h4>
-            <div class="artifact-list">
-                <div>Conversation manager: <strong>${sessionState.conversation_manager || 'SlidingWindow'}</strong></div>
-                <div>Trimmed turns: <strong>${formatInteger(sessionState.removed_message_count)}</strong></div>
-                <div>Started: <strong>${formatTimestamp(sessionState.session_created_at)}</strong></div>
-                <div>Updated: <strong>${formatTimestamp(sessionState.session_updated_at)}</strong></div>
-            </div>
-        </div>
+        ${supplementalHtml}
     `;
+
+    dashboardContent.querySelectorAll('.dashboard-agent-chip').forEach(chip => {
+        chip.addEventListener('click', (event) => {
+            const id = event.currentTarget && event.currentTarget.dataset ? event.currentTarget.dataset.agentId : null;
+            if (id) {
+                selectDashboardAgent(id);
+            }
+        });
+    });
 }
 
 function buildRoleBreakdown(byRole = {}) {
@@ -1336,6 +1404,96 @@ function buildAdoSummary(info = {}) {
         lines.push(`Items: <strong>${summary}</strong>`);
     }
     return lines.map(line => `<div>${line}</div>`).join('');
+}
+
+function normalizeDashboardAgents(data) {
+    if (data && Array.isArray(data.agents) && data.agents.length) {
+        return data.agents.map(agent => ({
+            id: agent.id,
+            label: agent.label || agent.id,
+            type: agent.type || 'tool',
+            tool_name: agent.tool_name || agent.id,
+            available: Boolean(agent.available),
+            source: agent.source,
+            summary: agent.summary || {}
+        }));
+    }
+    const fallbackConversation = (data && data.conversation) || {};
+    const fallbackSource = data && data.sources && data.sources.conversation ? data.sources.conversation : [];
+    return [
+        {
+            id: 'supervisor',
+            label: 'Supervisor',
+            type: 'supervisor',
+            tool_name: null,
+            available: Boolean(fallbackConversation.total_messages),
+            source: fallbackSource,
+            summary: fallbackConversation
+        }
+    ];
+}
+
+function buildAgentSelectorHtml(agents, selectedId) {
+    if (!agents || !agents.length) {
+        return '';
+    }
+    const chips = agents.map(agent => {
+        const secondary = `${agent.type === 'supervisor' ? 'Supervisor' : 'Tool'} • ${agent.available ? 'active' : 'idle'}`;
+        const activeClass = agent.id === selectedId ? 'active' : '';
+        return `
+            <button type="button" class="dashboard-agent-chip ${activeClass}" data-agent-id="${agent.id}">
+                ${agent.label}
+                <span>${secondary}</span>
+            </button>
+        `;
+    }).join('');
+    return `<div class="dashboard-agent-selector">${chips}</div>`;
+}
+
+function buildAgentActivityCard(byRole = {}) {
+    const userTurns = Number(byRole.user || 0);
+    const assistantTurns = Number(byRole.assistant || 0);
+    const systemTurns = Number(byRole.system || 0);
+    return `
+        <div class="dashboard-card">
+            <h4>Agent Activity</h4>
+            <strong>${formatInteger(assistantTurns)}</strong>
+            <div class="role-breakdown">
+                <div>Inputs: <strong>${formatInteger(userTurns)}</strong></div>
+                <div>Outputs: <strong>${formatInteger(assistantTurns)}</strong></div>
+                <div>System: <strong>${formatInteger(systemTurns)}</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+function buildAgentContextCard(agent) {
+    if (!agent) {
+        return '<div class="dashboard-card"><h4>Tool Context</h4><div class="artifact-list">No agent stats available.</div></div>';
+    }
+    const status = agent.available ? 'Active' : 'Idle';
+    const sourceLabel = formatAgentSource(agent.source);
+    const toolName = agent.tool_name || agent.label || 'Tool';
+    return `
+        <div class="dashboard-card">
+            <h4>Tool Context</h4>
+            <div class="artifact-list">
+                <div>Tool name: <strong>${toolName}</strong></div>
+                <div>Status: <strong>${status}</strong></div>
+                <div>Data source: <strong>${sourceLabel}</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+function formatAgentSource(source) {
+    if (!source) return 'unknown';
+    if (Array.isArray(source)) {
+        if (!source.length) return 'unknown';
+        return source.join(', ');
+    }
+    if (typeof source === 'string') return source;
+    return 'unknown';
 }
 
 function formatRole(role) {
@@ -1374,4 +1532,14 @@ function refreshDashboardIfOpen(options = {}) {
     }
     const force = Boolean(options.forceRefresh);
     loadDashboardStats(force);
+}
+
+function selectDashboardAgent(agentId) {
+    if (!agentId || agentId === selectedDashboardAgentId) return;
+    selectedDashboardAgentId = agentId;
+    if (lastDashboardData) {
+        renderDashboard(lastDashboardData);
+    } else {
+        refreshDashboardIfOpen({ forceRefresh: true });
+    }
 }

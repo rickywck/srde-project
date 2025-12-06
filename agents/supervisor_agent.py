@@ -118,7 +118,8 @@ class SupervisorAgent:
             backlog_generation_agent = create_backlog_generation_agent(run_id)
             backlog_regeneration_agent = create_backlog_regeneration_agent(run_id)
             tagging_agent = create_tagging_agent(run_id)
-            retrieval_backlog_tool = create_retrieval_backlog_tool(run_id)
+            # Pass the factory-scoped backlog generation tool into the combined tool
+            retrieval_backlog_tool = create_retrieval_backlog_tool(run_id, backlog_fn=backlog_generation_agent)
             evaluation_agent = create_evaluation_agent(run_id)
             ado_writer_tool = create_ado_writer_tool(run_id)
 

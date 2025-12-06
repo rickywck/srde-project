@@ -75,6 +75,16 @@ def create_evaluation_agent(run_id: str):
         model = None
         model_id = ModelFactory.get_default_model_id()
 
+    # Instantiate long-lived Strands Agent at factory scope for in-memory visibility
+    evaluation_agent_instance = None
+    if model is not None:
+        try:
+            evaluation_agent_instance = Agent(model=model, system_prompt=evaluation_system_prompt)
+            logger.debug("Evaluation Agent instance created at factory scope")
+        except Exception as e:
+            logger.exception("Failed to instantiate Evaluation Agent at factory scope: %s", e)
+            evaluation_agent_instance = None
+
     @tool
     def evaluate_backlog_quality(input_json: str) -> str:
         """Evaluate the quality of generated backlog items against the original document.
@@ -193,7 +203,7 @@ def create_evaluation_agent(run_id: str):
         logger.debug("Evaluation agent model input prompt: %s", user_prompt)
 
         try:
-            agent = Agent(model=model, system_prompt=evaluation_system_prompt)
+            agent = evaluation_agent_instance or Agent(model=model, system_prompt=evaluation_system_prompt)
             agent_result = agent(
                 user_prompt,
                 structured_output_model=EvaluationOut,
