@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 from tools.retrieval_tool import create_retrieval_tool
 from agents.backlog_generation_agent import create_backlog_generation_agent
+from agents.utils.backlog_helper import BacklogHelper
 
 
 def _load_segment_from_file(run_id: str, segment_id: int, segments_file: Optional[str] = None) -> Dict[str, Any]:
@@ -63,6 +64,7 @@ def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None)
         dominant_intent: Optional[str] = None,
         segments_file_path: Optional[str] = None,
         user_instructions: Optional[str] = "",
+        overwrite: Optional[bool] = False,
     ) -> str:
         """
         Generate backlog items WITH context retrieval, returning only generation results.
@@ -77,6 +79,7 @@ def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None)
         - intent_labels: list of intent labels (optional, can be inferred)
         - dominant_intent: dominant intent label (optional, can be inferred)
         - segments_file_path: optional override path to segments.jsonl
+        - overwrite: when True, discard previous runs/<run_id>/generated_backlog.jsonl before generating
 
         Output: JSON string with backlog generation summary (retrieval context is NOT included in output)
         
@@ -104,6 +107,15 @@ def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None)
             dominant_intent = dominant_intent or (intent_labels[0] if intent_labels else "")
             user_instructions = user_instructions or ""
             seg_id = int(segment_id or 0)
+
+            # Optional discard-and-re-generate: clear existing backlog file once
+            if overwrite:
+                backlog_path = Path(f"runs/{run_id}/generated_backlog.jsonl")
+                logger.info("Overwrite requested; clearing existing backlog file: %s", backlog_path)
+                try:
+                    BacklogHelper.reset_backlog_file(backlog_path)
+                except Exception as e:
+                    logger.warning("Failed to reset backlog file %s: %s", backlog_path, e)
 
             print(f"Combined Tool: Starting retrieval + generation for segment {seg_id} (run_id: {run_id})")
 

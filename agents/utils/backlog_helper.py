@@ -86,6 +86,24 @@ class BacklogHelper:
                 f.write(json.dumps(item) + "\n")
 
     @staticmethod
+    def reset_backlog_file(file_path: Path) -> None:
+        """Remove or empty the backlog file to prepare for overwrite.
+
+        Ensures parent directory exists. Prefer unlink; if it fails, truncate.
+        """
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except Exception:
+            try:
+                with open(file_path, "w"):
+                    pass
+            except Exception:
+                # Do not raise; generation should continue even if cleanup fails
+                pass
+
+    @staticmethod
     def count_items(items: List[Dict[str, Any]]) -> Dict[str, int]:
         """Compute counts per type with semantics matching agent summaries."""
         def is_epic(t: str) -> bool:
