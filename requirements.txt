@@ -20,6 +20,7 @@ python-multipart>=0.0.6
 # Document processing
 python-docx>=1.0.0
 pypdf>=3.0.0
+PyPDF2
 
 # Testing
 pytest>=7.4.0

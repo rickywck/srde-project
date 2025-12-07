@@ -78,14 +78,17 @@ YAML-based prompt templates for all agents, managed via `prompt_loader.py`.
 Load your existing backlog and architecture docs into Pinecone:
 ```bash
 # Load ADO Backlog
-python ingestion/ado_loader.py --organization my-org --project my-project
+python ingestion/ado_loader.py --organization my-org --project my-project (both parameters are optional, defaults are taken from config.poc.yaml)
 
 # Load Architecture Docs
-python ingestion/arch_loader.py --path ./docs/architecture --project my-project
+python ingestion/arch_loader.py --path ./docs/architecture 
 ```
 
 #### 2. Run the System
 Start the FastAPI backend (if applicable) or run the workflow script directly (depending on entry point).
+```bash
+python app.py
+```
 
 #### 3. Evaluation
 Run evaluation scripts to assess performance:
@@ -93,7 +96,7 @@ Run evaluation scripts to assess performance:
 # Generate test dataset
 python evaluate/generate_eval_dataset.py --output eval/datasets/test.jsonl
 
-# Run tagging evaluation
+# Run tagging evaluation (against evaluation data set)
 python evaluate/evaluate_tagging.py --threshold 0.6
 ```
 
