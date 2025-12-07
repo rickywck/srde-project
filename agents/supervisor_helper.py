@@ -203,14 +203,13 @@ class SupervisorRunHelper:
         }
 
     def _collect_sub_agent_stats(self, supervisor_agent: Any, run_id: str, sessions_dir: str) -> List[Dict[str, Any]]:
-        """Summarize Agent-as-Tool children (memory + session repo + tool-usage fallback)."""
+        """Summarize Agent-as-Tool children (memory + session repo), filtering to sub-agents only."""
 
         if not supervisor_agent:
             return []
 
-        tools_by_name = self._get_tool_registry(supervisor_agent)
-        if not tools_by_name:
-            return []
+        parts = self._partition_tools_by_type(supervisor_agent)
+        agent_tools = parts.get("agents", {})
 
         # Supervisor tool usage (fallback when sub-agent has no messages)
         sup_conv = self._summarize_in_memory_messages(supervisor_agent) or {}
@@ -218,7 +217,7 @@ class SupervisorRunHelper:
 
         # Start with in-memory summaries where available
         entries: Dict[str, Dict[str, Any]] = {}
-        for tool_name, tool in tools_by_name.items():
+        for tool_name, tool in agent_tools.items():
             embedded_agent = self._extract_agent_from_tool(tool)
             inmem = self._summarize_in_memory_messages(embedded_agent) if embedded_agent else {}
             entries[tool_name] = {
@@ -233,43 +232,64 @@ class SupervisorRunHelper:
 
         # Merge with repository summaries if present (some tools may persist under agents/agent_*)
         repo_map = self._list_repo_agent_summaries(run_id, sessions_dir)
-        norm_tools = {self._normalize_name(name): name for name in tools_by_name.keys()}
-        for repo_key, repo_info in repo_map.items():
-            norm = self._normalize_name(repo_key)
-            if norm not in norm_tools:
-                # Attempt label-based normalization too
-                alt_norm = self._normalize_name(repo_info.get("label"))
-                if alt_norm in norm_tools:
-                    norm = alt_norm
-                else:
+        norm_tools = {self._normalize_name(name): name for name in agent_tools.keys()}
+        if agent_tools:
+            for repo_key, repo_info in repo_map.items():
+                norm = self._normalize_name(repo_key)
+                if norm not in norm_tools:
+                    # Attempt label-based normalization too
+                    alt_norm = self._normalize_name(repo_info.get("label"))
+                    if alt_norm in norm_tools:
+                        norm = alt_norm
+                    else:
+                        continue
+                tool_name = norm_tools[norm]
+                repo_summary = repo_info.get("summary") or {}
+                if not repo_summary:
                     continue
-            tool_name = norm_tools[norm]
-            repo_summary = repo_info.get("summary") or {}
-            if not repo_summary:
-                continue
-            current = entries.get(tool_name)
-            if not current:
-                entries[tool_name] = {
-                    "id": tool_name,
-                    "label": self._prettify_tool_name(tool_name),
+                current = entries.get(tool_name)
+                if not current:
+                    entries[tool_name] = {
+                        "id": tool_name,
+                        "label": self._prettify_tool_name(tool_name),
+                        "type": "tool",
+                        "tool_name": tool_name,
+                        "available": bool(repo_summary.get("total_messages")),
+                        "source": ["session_repository"],
+                        "summary": repo_summary,
+                    }
+                else:
+                    # Prefer the richer of the two summaries; combine sources
+                    combined_sources = list({*(current.get("source") or []), "session_repository"})
+                    better = repo_summary if (repo_summary.get("total_messages", 0) >= current["summary"].get("total_messages", 0)) else current["summary"]
+                    current.update({
+                        "available": current.get("available") or bool(repo_summary.get("total_messages")),
+                        "source": combined_sources,
+                        "summary": better,
+                    })
+        else:
+            # No in-memory agent tools detected; fall back to session repository agents
+            for repo_key, repo_info in repo_map.items():
+                repo_summary = repo_info.get("summary") or {}
+                if not repo_summary:
+                    continue
+                # Use repo_key as tool name and provided label
+                entries[repo_key] = {
+                    "id": repo_key,
+                    "label": repo_info.get("label") or self._prettify_tool_name(repo_key),
                     "type": "tool",
-                    "tool_name": tool_name,
+                    "tool_name": repo_key,
                     "available": bool(repo_summary.get("total_messages")),
                     "source": ["session_repository"],
                     "summary": repo_summary,
                 }
-            else:
-                # Prefer the richer of the two summaries; combine sources
-                combined_sources = list({*(current.get("source") or []), "session_repository"})
-                better = repo_summary if (repo_summary.get("total_messages", 0) >= current["summary"].get("total_messages", 0)) else current["summary"]
-                current.update({
-                    "available": current.get("available") or bool(repo_summary.get("total_messages")),
-                    "source": combined_sources,
-                    "summary": better,
-                })
 
-        # Fallback: if still no summary, synthesize from supervisor's tool usage counts
-        for tool_name in tools_by_name.keys():
+        # Fallback: if still no summary for known sub-agents, synthesize from supervisor's tool usage counts
+        target_names = list(agent_tools.keys())
+        if not target_names and repo_map:
+            # Restrict fallback synthesis to repo-known agents when no in-memory tools
+            target_names = list(repo_map.keys())
+        for tool_name in target_names:
             ent = entries.get(tool_name)
             if not ent:
                 ent = {
@@ -283,7 +303,13 @@ class SupervisorRunHelper:
                 }
                 entries[tool_name] = ent
             if not ent.get("summary"):
+                # Try raw and normalized matches
                 count = int(usage_map.get(tool_name, 0))
+                if count == 0:
+                    norm = self._normalize_name(tool_name)
+                    # Build normalized map once
+                    norm_usage = {self._normalize_name(n): c for n, c in usage_map.items()}
+                    count = int(norm_usage.get(norm, 0))
                 if count > 0:
                     ent["available"] = True
                     ent["source"] = list({*(ent.get("source") or []), "supervisor_usage"})
@@ -298,6 +324,26 @@ class SupervisorRunHelper:
                     }
 
         return list(entries.values())
+
+    def _partition_tools_by_type(self, supervisor_agent: Any) -> Dict[str, Dict[str, Any]]:
+        """Partition tools into sub-agents and function tools.
+
+        Returns dict with keys:
+          - 'agents': mapping name -> tool for items that embed / are agents
+          - 'function_tools': mapping name -> tool for plain function tools
+        """
+        tools = self._get_tool_registry(supervisor_agent)
+        agents: Dict[str, Any] = {}
+        function_tools: Dict[str, Any] = {}
+
+        for name, tool in tools.items():
+            embedded_agent = self._extract_agent_from_tool(tool)
+            if embedded_agent or self._looks_like_agent(tool):
+                agents[name] = tool
+            else:
+                function_tools[name] = tool
+
+        return {"agents": agents, "function_tools": function_tools}
 
     def _get_tool_registry(self, supervisor_agent: Any) -> Dict[str, Any]:
         """Return mapping of tool_name -> tool object using registry or fallback to .tools list."""
