@@ -62,6 +62,7 @@ def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None)
         intent_labels: Optional[List[str]] = None,
         dominant_intent: Optional[str] = None,
         segments_file_path: Optional[str] = None,
+        user_instructions: Optional[str] = "",
     ) -> str:
         """
         Generate backlog items WITH context retrieval, returning only generation results.
@@ -101,6 +102,7 @@ def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None)
                 raise ValueError("Missing segment_text. Provide segment_text directly or a valid segment_id present in segments.jsonl.")
             intent_labels = intent_labels or []
             dominant_intent = dominant_intent or (intent_labels[0] if intent_labels else "")
+            user_instructions = user_instructions or ""
             seg_id = int(segment_id or 0)
 
             print(f"Combined Tool: Starting retrieval + generation for segment {seg_id} (run_id: {run_id})")
@@ -142,6 +144,7 @@ def create_retrieval_backlog_tool(run_id: str, backlog_fn: Optional[Any] = None)
                     "ado_items": retrieved.get("ado_items", []) or [],
                     "architecture_constraints": retrieved.get("architecture_constraints", []) or [],
                 },
+                user_instructions=user_instructions,
             )
 
             # Return generation result directly

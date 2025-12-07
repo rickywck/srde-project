@@ -112,6 +112,7 @@ def create_backlog_generation_agent(run_id: str):
         intent_labels: List[str] = None,
         dominant_intent: str = None,
         retrieved_context: Dict[str, Any] = None,
+        user_instructions: str = "",
     ) -> str:
         """
         Generate backlog items (epics, features, stories) from a segment with retrieved context.
@@ -141,6 +142,7 @@ def create_backlog_generation_agent(run_id: str):
             intent_labels = intent_labels or []
             dominant_intent = dominant_intent or ""
             retrieved_context = retrieved_context or {}
+            user_instructions = user_instructions or ""
             
             logger.info("Backlog Generation Agent: Processing segment %s (run_id: %s)", segment_id, run_id)
             
@@ -196,7 +198,8 @@ def create_backlog_generation_agent(run_id: str):
                 intent_labels=", ".join(intent_labels),
                 dominant_intent=dominant_intent,
                 ado_items_formatted=ado_formatted,
-                architecture_constraints_formatted=arch_formatted
+                architecture_constraints_formatted=arch_formatted,
+                user_instructions=user_instructions,
             )
 
             # Approx token counts for debugging

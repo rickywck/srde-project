@@ -82,6 +82,10 @@ user_prompt_template: |
   - Respect architecture constraints in your descriptions and acceptance criteria
   - Be specific and actionable - avoid vague descriptions
 
+  # USER INSTRUCTIONS (IF PROVIDED)
+
+  {user_instructions}
+
 parameters:
   max_completion_tokens: 5000
   response_format: json_object

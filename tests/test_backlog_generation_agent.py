@@ -57,6 +57,7 @@ def test_backlog_generation_with_synthetic_context(monkeypatch, tmp_path):
         intent_labels=payload["intent_labels"],
         dominant_intent=payload["dominant_intent"],
         retrieved_context=payload["retrieved_context"],
+        user_instructions="",
     )
     res = json.loads(raw)
 

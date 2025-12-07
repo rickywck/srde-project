@@ -142,7 +142,8 @@ class BacklogSynthesisWorkflow:
                 segment_id=seg_id,
                 segment_text=segment.get("raw_text", ""),
                 intent_labels=segment.get("intent_labels", []),
-                dominant_intent=segment.get("dominant_intent", "")
+                dominant_intent=segment.get("dominant_intent", ""),
+                user_instructions="",
             )
             try:
                 generation_result = json.loads(gen_json)
