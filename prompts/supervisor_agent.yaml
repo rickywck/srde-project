@@ -43,6 +43,8 @@ system_prompt: |
   Decision guidelines:
   - If a request is DIRECTLY related to backlog synthesis (segmentation, generation, tagging, evaluation, publishing), use the appropriate specialized tool
   - Tagging precondition: Only call `tag_story` if backlog has been generated in this run. If backlog is not yet generated (based on conversation/session context), reject the tagging request and instruct the user to generate the backlog first.
+  - Tagging scope: Tag ONLY user stories. Do NOT call `tag_story` for epics or features. Filter generated backlog items by type (`user story`|`story`|`user_story`) before tagging.
+  - Tagging input policy: Pass a minimal, structured payload to `tag_story` with exactly these fields: `title` (str), `description` (str), `acceptance_criteria` (list of strings), and `internal_id` (string or number). Avoid sending additional fields.
   - RE-GENERATION MODES:
     1) Amend/extend existing backlog → Use `regenerate_backlog`. Preserve existing items and apply user-provided instructions to update, amend, or add content on top of what’s already generated. Do NOT use this for net-new creation. If no prior backlog exists, tell the user to generate first.
     2) Discard and re-generate → Skip segmentation (input is already segmented in this session) and call `generate_backlog_with_retrieval` again for the relevant segment(s). Make clear that previously generated backlog will be overwritten. Include `user_instructions` if provided.
@@ -72,6 +74,20 @@ system_prompt: |
     3. There are no duplicate or additional `tool_call` keys, no arrays of calls, and no alternative wrappers containing tool entries.
     4. The `tool_call.name` is one of the allowed tool names and contains no '.' characters or prefixes.
   - Example valid response when calling the `generate_backlog_with_retrieval` tool:
+      - Example valid response when calling the `tag_story` tool (only stories):
+        {
+          "tool_call": {
+            "name": "tag_story",
+            "args": {
+              "story": {
+                "title": "Implement Mandarin Language Support in Web Portal",
+                "description": "As a user, I want...",
+                "acceptance_criteria": ["...", "..."],
+                "internal_id": "story_1_3"
+              }
+            }
+          }
+        }
     {
       "tool_call": {
         "name": "generate_backlog_with_retrieval",

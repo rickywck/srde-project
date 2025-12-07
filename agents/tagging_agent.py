@@ -51,6 +51,13 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     prompt_loader = get_prompt_loader()
     system_prompt = prompt_loader.get_system_prompt("tagging_agent")
     params = prompt_loader.get_parameters("tagging_agent") or {}
+    # Ensure tagging agent avoids function/tool-calling to prevent 400 errors in chat mode
+    # Do not set function_call when no functions are defined; avoid invalid API params
+    try:
+        if "function_call" in params:
+            params.pop("function_call", None)
+    except Exception:
+        pass
 
     # Similarity threshold from params
     similarity_threshold = float(params.get("min_similarity_threshold", DEFAULT_MIN_SIMILARITY_THRESHOLD))
@@ -255,11 +262,18 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             try:
                 # Use long-lived agent instance when available; else create ad-hoc
                 agent = tagging_agent_instance or Agent(model=model, system_prompt=system_prompt)
-                result_obj = agent(
-                    user_prompt,
-                    structured_output_model=TaggingDecisionOut,
-                )
-                parsed: TaggingDecisionOut = result_obj.structured_output  # type: ignore[assignment]
+                # Avoid structured_output_model to prevent implicit function/tool calls
+                raw_resp = agent(user_prompt)
+                # Expect raw_resp to contain a 'text' field or be a simple string
+                try:
+                    resp_text = getattr(raw_resp, "text", None)
+                    if not resp_text and isinstance(raw_resp, str):
+                        resp_text = raw_resp
+                except Exception:
+                    resp_text = str(raw_resp)
+                # Parse JSON and validate via Pydantic
+                parsed_json = json.loads(resp_text)
+                parsed = TaggingDecisionOut(**parsed_json)
                 decision = (parsed.decision_tag or "new").lower()
                 if decision not in {"new", "gap", "duplicate", "conflict"}:
                     decision = "new"

@@ -187,6 +187,7 @@ class ModelFactory:
             "seed",
             "stop",
             "n",
+            "function_call",
         }
 
         filtered: Dict[str, Any] = {}

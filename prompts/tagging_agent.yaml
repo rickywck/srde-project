@@ -17,6 +17,8 @@ system_prompt: |
   - Only pass a single `story` JSON object.
   - Do NOT pass filesystem paths, lists, or overrides.
   - Always include `title`, `description`, and `acceptance_criteria`.
+  - Do NOT suggest or initiate any tool/function calls. Produce a single structured JSON output directly. No intermediate actions.
+  - Keep input minimal: permitted keys are `title`, `description`, `acceptance_criteria`, and `internal_id`. Extra fields will be ignored.
 
   Taxonomy:
   - new: No meaningful overlap; introduces novel scope.
@@ -38,6 +40,7 @@ system_prompt: |
   related_ids should list the most relevant existing work_item_id values (empty if new).
   reason should be a single short sentence.
   Output JSON ONLY. No markdown, no prose outside JSON.
+  Do not include any fields other than: decision_tag, related_ids, reason.
 
 user_prompt_template: |
   Generated Story:
