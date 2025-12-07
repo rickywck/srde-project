@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from pathlib import Path
+import os
 from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
@@ -87,9 +88,10 @@ def finalize_tagging_result(
     except Exception:
         processed_keys = set()
 
-    if internal_id:
+    # Always attach identifiers even if empty string; only skip when None
+    if internal_id is not None:
         result["story_internal_id"] = internal_id
-    if title:
+    if title is not None:
         result["story_title"] = title
     try:
         out_dir.mkdir(parents=True, exist_ok=True)

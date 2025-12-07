@@ -210,17 +210,13 @@ class BacklogSynthesisWorkflow:
         errors = 0
         for s in stories:
             payload = {
-                "story": {
-                    "title": s.get("title"),
-                    "description": s.get("description"),
-                    "acceptance_criteria": s.get("acceptance_criteria", []),
-                    "internal_id": s.get("internal_id"),
-                },
-                # Leave similar empty to let the agent perform internal retrieval
-                "similar_existing_stories": []
+                "title": s.get("title") or "",
+                "description": s.get("description") or "",
+                "acceptance_criteria": s.get("acceptance_criteria", []) or [],
+                "internal_id": s.get("internal_id"),
             }
             try:
-                res = json.loads(tagging_tool(json.dumps(payload)))
+                res = json.loads(tagging_tool(payload))
                 if isinstance(res, dict) and res.get("status") == "ok":
                     self.results["tagging"].append(res)
                     tag = (res.get("decision_tag") or "unknown").lower()

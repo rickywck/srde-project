@@ -2,20 +2,10 @@ name: tagging_agent
 description: |
   Classify user stories relative to existing backlog (new/gap/duplicate/conflict).
 
-  IMPORTANT: When calling this tool, always provide the `story` argument as a JSON
-  object with keys: `title` (string), `description` (string), and
-  `acceptance_criteria` (list). Do NOT pass a filesystem path (for example
-  "runs/<id>/generated_backlog.jsonl") in the `story` field. If you need to
-  reference an existing run, pass `run_id` as a plain identifier (UUID) or use
-  the explicit `backlog_path` parameter.
-
-  Valid example call shapes:
-    - {"story": {"title":"...", "description":"...", "acceptance_criteria":["..."]}}
-    - {"stories": [{...}, {...}]}
-
-  If a caller places a filesystem path into the `story` payload, the tool will
-  try to interpret it (fallback) but this is discouraged. Prefer passing story
-  objects or plain `run_id` instead.
+  IMPORTANT: Provide ONLY one argument: `story` as a JSON object with keys
+  `title` (string), `description` (string), and `acceptance_criteria` (list).
+  Do NOT pass filesystem paths, lists of stories, or run/backlog overrides.
+  The agent will use the current `run_id` context to retrieve the backlog.
 version: 1.0
 
 system_prompt: |
@@ -24,8 +14,9 @@ system_prompt: |
   Return STRICT JSON ONLY with fields: decision_tag, related_ids, reason.
 
   IMPORTANT TOOL USAGE GUIDELINES (for any agent that will call this tool):
-  - Do NOT pass filesystem paths as the `story` payload.
-  - Always pass story data as a JSON object with `title` and `description`.
+  - Only pass a single `story` JSON object.
+  - Do NOT pass filesystem paths, lists, or overrides.
+  - Always include `title`, `description`, and `acceptance_criteria`.
 
   Taxonomy:
   - new: No meaningful overlap; introduces novel scope.

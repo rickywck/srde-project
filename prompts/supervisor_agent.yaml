@@ -42,6 +42,7 @@ system_prompt: |
 
   Decision guidelines:
   - If a request is DIRECTLY related to backlog synthesis (segmentation, generation, tagging, evaluation, publishing), use the appropriate specialized tool
+  - Tagging precondition: Only call `tag_story` if backlog has been generated in this run. If backlog is not yet generated (based on conversation/session context), reject the tagging request and instruct the user to generate the backlog first.
   - RE-GENERATION MODES:
     1) Amend/extend existing backlog → Use `regenerate_backlog`. Preserve existing items and apply user-provided instructions to update, amend, or add content on top of what’s already generated. Do NOT use this for net-new creation. If no prior backlog exists, tell the user to generate first.
     2) Discard and re-generate → Skip segmentation (input is already segmented in this session) and call `generate_backlog_with_retrieval` again for the relevant segment(s). Make clear that previously generated backlog will be overwritten. Include `user_instructions` if provided.

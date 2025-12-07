@@ -33,6 +33,14 @@ class TaggingDecisionOut(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class TaggingStoryIn(BaseModel):
+    title: str = Field(default="")
+    description: str = Field(default="")
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    internal_id: Union[str, int, None] = None
+    model_config = ConfigDict(extra="ignore")
+
+
 # Note: Prompt building now handled by prompt_loader from prompts/tagging_agent.yaml
 
 
@@ -74,96 +82,73 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
 
     @tool
     def tag_story(
-        story_data: Any = None,
-        story: Dict[str, Any] = None,
-        similar_existing_stories: List[Dict[str, Any]] = None,
-        run_id_override: str = None,
-        backlog_path: str = None,
+        story: Any
     ) -> str:
-        """Classify ONE generated user story relative to existing backlog.
+        """Classify ONE generated user story relative to the current run's backlog.
 
-        Usage (required): always pass `story` as a JSON-like dict with keys:
-        `title` (str), `description` (str), and `acceptance_criteria` (list).
+        Required input:
+        - `story`: JSON object with `title` (str), `description` (str), and `acceptance_criteria` (list)
 
-        Alternative accepted call shapes:
-        - `stories`: list of story objects
-        - `run_id`: a run identifier (string) - fallback only, not preferred
-        - `backlog_path`: explicit path to a backlog file - fallback only, not preferred
+        Behaviour:
+        - Accepts ONLY a single `story` argument. No paths, lists, or overrides.
+        - Uses the agent's current `run_id` to retrieve existing backlog for similarity.
 
-        Important rules:
-        - Do NOT pass a filesystem path in the `story` field; pass `run_id`
-            or `backlog_path` when referencing existing runs/backlogs.
-        - The tool MUST choose exactly one `decision_tag` from
-            {"new","gap","duplicate","conflict"}.
-        - The tool returns STRICT JSON ONLY (no markdown, no extra prose).
-
-        Output contract (required fields in the structured response):
+        Output (STRICT JSON ONLY):
         - `decision_tag`: "new"|"gap"|"duplicate"|"conflict"
-        - `related_ids`: list of most relevant existing `work_item_id` values
+        - `related_ids`: list of relevant existing `work_item_id` values
         - `reason`: single short sentence (<= 20 words)
-
-        Heuristics (informational): prefer `gap` over `duplicate` unless fully
-        covered; use `conflict` for true contradictions or mutually exclusive
-        directions.
         """
-        story_title = story.get('title', 'N/A') if story else None
-        desc = story.get('description', '') if story else ''
-        story_keys = list(story.keys()) if story else []
-        similar_count = len(similar_existing_stories) if similar_existing_stories else 0
-        logger.debug("tag_story called with: run_id=%r, story_data=%r, story_title=%r, story_description=%s..., story_keys=%r, similar_stories_count=%d, run_id_override=%r, backlog_path=%r",
-                     run_id, story_data, story_title, desc[:100] if desc else None, story_keys, similar_count, run_id_override, backlog_path)
-
-        # Quick validation: if raw string provided, ensure it's JSON or a path
-        if isinstance(story_data, str):
-            s = story_data.strip()
-            is_path_like = s.endswith(".json") or s.endswith(".jsonl") or ("/" in s) or ("\\" in s)
-            if not is_path_like:
-                try:
-                    json.loads(s)
-                except Exception:
-                    return json.dumps({
-                        "status": "error",
-                        "run_id": run_id,
-                        "decision_tag": "new",
-                        "related_ids": [],
-                        "reason": "Invalid input JSON: non-JSON string provided",
-                        "early_exit": True,
-                        "similarity_threshold": similarity_threshold,
-                        "similar_count": 0,
-                        "model_used": model_id
-                    })
-
-        # Resolve input into normalized payload (single story or list if path)
-        resolver = TaggingInputResolver(default_run_id=run_id, default_threshold=similarity_threshold)
+        # Validate and normalize input strictly via Pydantic
+        normalized_story: Dict[str, Any] = {}
         try:
-            resolved = resolver.resolve(
-                story_data=story_data,
-                story=story,
-                similar_existing_stories=similar_existing_stories,
-                similarity_threshold=similarity_threshold,
-                run_id=run_id_override,
-                backlog_path=backlog_path,
-            )
+            if isinstance(story, str):
+                story_obj = json.loads(story)
+            else:
+                story_obj = story
+            ts = TaggingStoryIn(**(story_obj or {}))
+            normalized_story = {
+                "title": ts.title or "",
+                "description": ts.description or "",
+                "acceptance_criteria": ts.acceptance_criteria or [],
+                "internal_id": ts.internal_id,
+            }
         except Exception as e:
             return json.dumps({
                 "status": "error",
                 "run_id": run_id,
                 "decision_tag": "new",
                 "related_ids": [],
-                "reason": f"Invalid input: {e}",
+                "reason": f"Invalid story payload: {e}",
                 "early_exit": True,
                 "similarity_threshold": similarity_threshold,
                 "similar_count": 0,
                 "model_used": model_id
             })
 
-        # Finalize/persist behavior moved to `finalize_tagging_result` in tagging_helper
-        current_out_dir: Path = resolved["out_dir"]
+        story_title = normalized_story.get('title', 'N/A') if isinstance(normalized_story, dict) else 'N/A'
+        desc = normalized_story.get('description', '') if isinstance(normalized_story, dict) else ''
+        story_keys = list(normalized_story.keys()) if normalized_story else []
+        logger.debug(
+            "tag_story called with: run_id=%r, story_title=%r, story_description=%s..., story_keys=%r",
+            run_id, story_title, desc[:100] if desc else None, story_keys,
+        )
 
-        stories: List[Dict[str, Any]] = resolved.get("stories") or []
-        effective_run_id: str = resolved.get("run_id") or run_id
-        #default_threshold_local: float = float(resolved.get("threshold", default_similarity_threshold))
-        global_similar: List[Dict[str, Any]] = resolved.get("similar_existing_stories") or []
+        if not isinstance(normalized_story, dict) or not normalized_story:
+            return json.dumps({
+                "status": "error",
+                "run_id": run_id,
+                "decision_tag": "new",
+                "related_ids": [],
+                "reason": "Invalid input: could not resolve story",
+                "early_exit": True,
+                "similarity_threshold": similarity_threshold,
+                "similar_count": 0,
+                "model_used": model_id
+            })
+
+        current_out_dir: Path = Path(f"runs/{run_id}")
+        effective_run_id: str = run_id
+        global_similar: List[Dict[str, Any]] = []
 
         def _tag_one(story_obj: Dict[str, Any]) -> Dict[str, Any]:
             internal_id = story_obj.get("internal_id")
@@ -189,31 +174,19 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             logger.debug("Tagging Agent: Story payload: %s", raw_story_json[:1000])
             logger.info("Tagging Agent: Processing story title='%s' | description='%s…'", title, (story_obj.get('description', '') or '')[:120])
 
-            # Retrieve similar if none provided
+            # Retrieve similar stories for current run
             if not similar_local:
                 try:
-                    logger.info("Tagging Agent: No similar stories provided; performing internal retrieval…")
+                    logger.info("Tagging Agent: Retrieving similar stories from configured index…")
                     retriever = SimilarStoryRetriever(config=None, min_similarity=similarity_threshold)
-                    similar_local = retriever.find_similar_stories(
-                        {
-                            "title": story_obj.get("title", ""),
-                            "description": story_obj.get("description", ""),
-                            "acceptance_criteria": story_obj.get("acceptance_criteria", []),
-                        }
-                    )
-                    logger.info("Tagging Agent: Internal retrieval found %s similar stories", len(similar_local or []))
-                    # Debug: list retrieved stories and their similarity scores
-                    try:
-                        logger.debug("Tagging Agent: Retrieved similar stories (id | similarity | title):")
-                        for s in (similar_local or []):
-                            sid = s.get("work_item_id") if isinstance(s, dict) else None
-                            sim = float(s.get("similarity", 0.0)) if isinstance(s, dict) else 0.0
-                            stitle = (s.get("title") or "")[:200] if isinstance(s, dict) else str(s)
-                            logger.debug(" - %s | %.4f | %s", sid, sim, stitle)
-                    except Exception:
-                        logger.debug("Tagging Agent: Could not enumerate retrieved similar stories for debug output")
+                    similar_local = retriever.find_similar_stories({
+                        "title": story_obj.get("title", ""),
+                        "description": story_obj.get("description", ""),
+                        "acceptance_criteria": story_obj.get("acceptance_criteria", []),
+                    })
+                    logger.info("Tagging Agent: Retrieval found %s similar stories", len(similar_local or []))
                 except Exception as e:
-                    logger.exception("Tagging Agent: Internal retrieval failed: %s", e)
+                    logger.warning("Tagging Agent: Similarity retrieval failed: %s", e)
             else:
                 # Debug: similar stories were supplied in input, list them
                 try:
@@ -341,22 +314,8 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
 
-        # Process stories (single normally; multiple only when path provided)
-        results: List[Dict[str, Any]] = []
-        for s in stories:
-            if not isinstance(s, dict):
-                continue
-            results.append(_tag_one(s))
-
-        # Return single result directly, else summary
-        if len(results) == 1:
-            return json.dumps(results[0])
-        return json.dumps({
-            "status": "ok",
-            "run_id": resolved.get("run_id") or run_id,
-            "processed": len(results),
-            "model_used": model_id,
-        })
+        result_obj = _tag_one(normalized_story)
+        return json.dumps(result_obj)
 
     return tag_story
 
