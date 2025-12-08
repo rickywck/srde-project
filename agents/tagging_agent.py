@@ -66,6 +66,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     if default_similarity_threshold is not None:
         try:
             similarity_threshold = float(default_similarity_threshold)
+            logger.debug("Similarity_threshold overridden by default: %.4f", similarity_threshold)
         except Exception:
             logger.debug("Invalid default_similarity_threshold provided; falling back to configured threshold")
 
@@ -165,23 +166,10 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
 
         current_out_dir: Path = Path(f"runs/{run_id}")
         effective_run_id: str = run_id
-        global_similar: List[Dict[str, Any]] = []
 
         def _tag_one(story_obj: Dict[str, Any]) -> Dict[str, Any]:
             internal_id = story_obj.get("internal_id")
             title = story_obj.get("title")
-            #threshold = default_threshold_local
-            # Debug: show the similarity threshold used for tagging this story
-            try:
-                logger.debug(
-                    "Tagging Agent: Using similarity threshold=%.4f for story internal_id=%s title=%s",
-                    float(similarity_threshold),
-                    internal_id,
-                    title,
-                )
-            except Exception:
-                logger.debug("Tagging Agent: Using similarity threshold (could not format values): %s", str(similarity_threshold))
-            similar_local = list(global_similar) if isinstance(global_similar, list) else []
 
             # Log payload
             try:
@@ -191,29 +179,36 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             logger.debug("Tagging Agent: Story payload: %s", raw_story_json[:1000])
             logger.info("Tagging Agent: Processing story title='%s' | description='%s…'", title, (story_obj.get('description', '') or '')[:120])
 
-            # Retrieve similar stories for current run
-            if not similar_local:
-                try:
-                    retriever = SimilarStoryRetriever(config=None, min_similarity=similarity_threshold)
-                    similar_local = retriever.find_similar_stories({
-                        "title": story_obj.get("title", ""),
-                        "description": story_obj.get("description", ""),
-                        "acceptance_criteria": story_obj.get("acceptance_criteria", []),
-                    })
-                    logger.info("Tagging Agent: Retrieval found %s similar stories", len(similar_local or []))
-                except Exception as e:
-                    logger.warning("Tagging Agent: Similarity retrieval failed: %s", e)
-            else:
-                # Debug: similar stories were supplied in input, list them
-                try:
-                    logger.debug("Tagging Agent: Using provided similar stories (count=%d):", len(similar_local))
+            # Retrieve similar stories for current run (always perform retrieval)
+            similar_local: List[Dict[str, Any]] = []
+            try:
+                retriever = SimilarStoryRetriever(config=None, min_similarity=similarity_threshold)
+                similar_local = retriever.find_similar_stories({
+                    "title": story_obj.get("title", ""),
+                    "description": story_obj.get("description", ""),
+                    "acceptance_criteria": story_obj.get("acceptance_criteria", []),
+                }) or []
+                logger.info("Tagging Agent: Retrieval found %s similar stories", len(similar_local))
+
+                # In debug mode, log each similar story's key fields
+                if logger.isEnabledFor(logging.DEBUG):
                     for s in similar_local:
-                        sid = s.get("work_item_id") if isinstance(s, dict) else None
-                        sim = float(s.get("similarity", 0.0)) if isinstance(s, dict) else 0.0
-                        stitle = (s.get("title") or "")[:200] if isinstance(s, dict) else str(s)
-                        logger.debug(" - %s | %.4f | %s", sid, sim, stitle)
-                except Exception:
-                    logger.debug("Tagging Agent: Could not enumerate provided similar stories for debug output")
+                        if not isinstance(s, dict):
+                            logger.debug("Similar story (non-dict): %r", s)
+                            continue
+                        sid = s.get("work_item_id")
+                        sim = s.get("similarity", 0.0)
+                        stitle = (s.get("title") or "")[:200]
+                        sdesc = (s.get("description") or "")[:300]
+                        logger.debug(
+                            "Similar story | id=%s | similarity=%.4f | title=%s | desc=%s",
+                            sid,
+                            float(sim) if isinstance(sim, (int, float)) else 0.0,
+                            stitle,
+                            sdesc,
+                        )
+            except Exception as e:
+                logger.warning("Tagging Agent: Similarity retrieval failed: %s", e)
 
             above_threshold = [s for s in (similar_local or []) if s.get("similarity", 0.0) >= similarity_threshold]
             if not above_threshold:

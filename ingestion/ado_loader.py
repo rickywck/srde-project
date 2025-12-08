@@ -285,6 +285,11 @@ def main():
     parser.add_argument("--organization", help="ADO organization name")
     parser.add_argument("--project", help="ADO project name")
     parser.add_argument("--config", default="config.poc.yaml", help="Path to config file")
+    parser.add_argument(
+        "--delete-only",
+        action="store_true",
+        help="Only delete existing vectors for this project/namespace and exit (do not upsert).",
+    )
     
     args = parser.parse_args()
     
@@ -333,7 +338,14 @@ def main():
         embedding_model=config['openai']['embedding_model'],
         namespace=unified_namespace
     )
-    
+
+    # If user requested delete-only, perform deletion and exit before fetching/upserting
+    if getattr(args, "delete_only", False):
+        print(f"Deleting existing vectors in namespace '{unified_namespace}' for project '{project}' (delete-only)...")
+        loader.delete_existing_backlog()
+        print("Delete-only operation complete.")
+        sys.exit(0)
+
     print(f"Fetching work items from ADO: {organization}/{project} -> Pinecone namespace '{unified_namespace}'")
     work_items = loader.fetch_work_items()
     
