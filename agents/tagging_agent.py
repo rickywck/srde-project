@@ -12,7 +12,7 @@ from strands import Agent, tool
 from .prompt_loader import get_prompt_loader
 from .utils.similar_story_retriever import SimilarStoryRetriever
 from .model_factory import ModelFactory
-from .tagging_helper import TaggingInputResolver, _rule_based_fallback, finalize_tagging_result
+from .tagging_helper import TaggingInputResolver, finalize_tagging_result
 import logging
 from pydantic import BaseModel, Field, ValidationError, ConfigDict
 from strands.types.exceptions import StructuredOutputException
@@ -24,6 +24,26 @@ logger = logging.getLogger(__name__)
 GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
 USER_STORY_TYPES = {"user story", "story", "user_story"}
 DEFAULT_MIN_SIMILARITY_THRESHOLD = 0.5
+
+# Simple JSON extractor to tolerate minor formatting issues from LLM outputs
+def _extract_json(text: str) -> Dict[str, Any]:
+    """Extract the first top-level JSON object from text.
+
+    Falls back to empty dict if not found or parsing fails.
+    """
+    try:
+        # Fast path: direct parse
+        return json.loads(text)
+    except Exception:
+        pass
+    try:
+        # Regex to find the first {...} block
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            return json.loads(m.group(0))
+    except Exception:
+        pass
+    return {}
 
 # Reference Pydantic model for the agent's structured output (informational only)
 class TaggingDecisionOut(BaseModel):
@@ -53,7 +73,9 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
     params = prompt_loader.get_parameters("tagging_agent") or {}
     # Ensure tagging agent avoids function/tool-calling to prevent 400 errors in chat mode
     # Do not set function_call when no functions are defined; avoid invalid API params
+    # Prefer deterministic responses; avoid unsupported params
     try:
+        params.setdefault("temperature", 0)
         if "function_call" in params:
             params.pop("function_call", None)
     except Exception:
@@ -77,15 +99,16 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         model = None
         model_id = ModelFactory.get_default_model_id()
 
-    # Instantiate a Strands Agent at factory scope (long-lived within supervisor runtime)
-    tagging_agent_instance = None
+    # Instantiate a Strands Agent at factory scope (long-lived within supervisor/runtime),
+    # so that it can be introspected similarly to the segmentation agent.
+    agent = None
     if model is not None:
         try:
-            tagging_agent_instance = Agent(model=model, system_prompt=system_prompt)
+            agent = Agent(model=model, system_prompt=system_prompt)
             logger.debug("Tagging Agent instance created at factory scope")
         except Exception as e:
             logger.exception("Failed to instantiate Tagging Agent at factory scope: %s", e)
-            tagging_agent_instance = None
+            agent = None
 
     @tool
     def tag_story(
@@ -178,7 +201,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 raw_story_json = json.dumps(story_obj, ensure_ascii=False)
             except Exception:
                 raw_story_json = str(story_obj)
-            logger.debug("Tagging Agent: Story payload: %s", raw_story_json[:1000])
+            logger.info("Tagging Agent: Story payload: %s", raw_story_json[:1000])
             logger.info("Tagging Agent: Processing story title='%s' | description='%s…'", title, (story_obj.get('description', '') or '')[:120])
 
             # Retrieve similar stories for current run
@@ -242,37 +265,35 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
             )
 
             if model is None:
-                logger.warning("Tagging Agent: No model available; using rule-based fallback")
-                fallback = _rule_based_fallback(story_obj, above_threshold, similarity_threshold)
-                result = {
-                    "status": "ok",
+                logger.error("Tagging Agent: No model available; skipping LLM evaluation for tagging")
+                return {
+                    "status": "error",
                     "run_id": effective_run_id,
-                    "decision_tag": fallback.get("decision_tag", "new"),
-                    "related_ids": fallback.get("related_ids", []),
-                    "reason": fallback.get("reason", "Fallback applied"),
-                    "early_exit": False,
+                    "decision_tag": "new",
+                    "related_ids": [],
+                    "reason": "Model unavailable for tagging",
+                    "early_exit": True,
                     "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
-                    "fallback_used": True
                 }
-                finalize_tagging_result(result, current_out_dir, internal_id, title)
-                return result
 
             try:
-                # Use long-lived agent instance when available; else create ad-hoc
-                agent = tagging_agent_instance or Agent(model=model, system_prompt=system_prompt)
-                # Avoid structured_output_model to prevent implicit function/tool calls
-                raw_resp = agent(user_prompt)
-                # Expect raw_resp to contain a 'text' field or be a simple string
-                try:
-                    resp_text = getattr(raw_resp, "text", None)
-                    if not resp_text and isinstance(raw_resp, str):
-                        resp_text = raw_resp
-                except Exception:
-                    resp_text = str(raw_resp)
-                # Parse JSON and validate via Pydantic
-                parsed_json = json.loads(resp_text)
+                # Call long-lived agent instance
+                resp_raw = agent(user_prompt)
+
+                # Normalize response to plain text for logging/parsing
+                if isinstance(resp_raw, (str, bytes)):
+                    resp_text = resp_raw
+                else:
+                    resp_text = getattr(resp_raw, "text", None) or str(resp_raw)
+
+                logger.info("Tagging Agent: Received response from LLM: %s", resp_text)
+
+                # Extract JSON from text
+                parsed_json = _extract_json(resp_text)
+                if not isinstance(parsed_json, dict) or not parsed_json:
+                    raise ValueError("Failed to extract JSON from agent response")
                 parsed = TaggingDecisionOut(**parsed_json)
                 decision = (parsed.decision_tag or "new").lower()
                 if decision not in {"new", "gap", "duplicate", "conflict"}:
@@ -294,39 +315,31 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 finalize_tagging_result(result, current_out_dir, internal_id, title)
                 return result
             except (StructuredOutputException, ValidationError) as e:
-                logger.warning("Tagging Agent: Structured output failed, using rule-based fallback. Reason: %s", e)
-                fallback = _rule_based_fallback(story_obj, above_threshold, similarity_threshold)
-                result = {
-                    "status": "ok",
+                logger.error("Tagging Agent: Structured output failed. Reason: %s", e)
+                return {
+                    "status": "error",
                     "run_id": effective_run_id,
-                    "decision_tag": fallback.get("decision_tag", "new"),
-                    "related_ids": fallback.get("related_ids", []),
-                    "reason": fallback.get("reason", "Fallback applied"),
-                    "early_exit": False,
+                    "decision_tag": "new",
+                    "related_ids": [],
+                    "reason": "LLM structured output failed",
+                    "early_exit": True,
                     "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
-                    "fallback_used": True
                 }
-                finalize_tagging_result(result, current_out_dir, internal_id, title)
-                return result
             except Exception as e:
-                logger.exception("Tagging Agent: Agent invocation failed, using rule-based fallback: %s", e)
-                fallback = _rule_based_fallback(story_obj, above_threshold, similarity_threshold)
-                result = {
-                    "status": "ok",
+                logger.exception("Tagging Agent: Agent invocation failed: %s", e)
+                return {
+                    "status": "error",
                     "run_id": effective_run_id,
-                    "decision_tag": fallback.get("decision_tag", "new"),
-                    "related_ids": fallback.get("related_ids", []),
-                    "reason": fallback.get("reason", "Fallback applied"),
-                    "early_exit": False,
+                    "decision_tag": "new",
+                    "related_ids": [],
+                    "reason": "LLM invocation failed",
+                    "early_exit": True,
                     "similarity_threshold": similarity_threshold,
                     "similar_count": len(above_threshold),
                     "model_used": model_id,
-                    "fallback_used": True
                 }
-                finalize_tagging_result(result, current_out_dir, internal_id, title)
-                return result
 
         result_obj = _tag_one(normalized_story)
         return json.dumps(result_obj)
