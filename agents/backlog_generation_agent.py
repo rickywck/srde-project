@@ -242,19 +242,56 @@ def create_backlog_generation_agent(run_id: str):
                 }
                 return json.dumps(error_msg, indent=2)
 
-            logger.info("Backlog Generation Agent: Calling Strands Agent (%s) with structured output...", model_name)
+            logger.info("Backlog Generation Agent: Calling Strands Agent (%s)...", model_name)
             try:
-                result = agent(
-                    prompt,
-                    structured_output_model=BacklogResponseOut,
-                )
-                # Strands returns validated structured output; ensure correct type
-                validated: BacklogResponseOut = result.structured_output  # type: ignore[assignment]
-            except (StructuredOutputException, ValidationError) as e:
-                logger.error("Backlog Generation Agent: Structured output failed: %s", e)
+                # Call agent WITHOUT structured_output_model since the prompt already
+                # specifies response_format: json_object
+                result = agent(prompt)
+                
+                # Extract the text response
+                response_text = ""
+                if hasattr(result, 'output'):
+                    response_text = result.output
+                elif hasattr(result, 'text'):
+                    response_text = result.text
+                elif hasattr(result, 'content'):
+                    response_text = result.content
+                elif isinstance(result, str):
+                    response_text = result
+                else:
+                    response_text = str(result)
+                
+                logger.info("Backlog Generation Agent: Received response length: %d", len(response_text))
+                
+                # Parse JSON response
+                response_data = json.loads(response_text)
+                
+                # Validate with Pydantic
+                validated: BacklogResponseOut = BacklogResponseOut(**response_data)
+                
+                # Convert to plain dicts
+                raw_items = []
+                for m in validated.backlog_items:
+                    try:
+                        raw_items.append(m.model_dump() if hasattr(m, "model_dump") else m.dict())
+                    except Exception:
+                        raw_items.append(dict(m))
+                
+                logger.info("Backlog Generation Agent: Validated and extracted %s backlog items", len(raw_items))
+                
+            except json.JSONDecodeError as e:
+                logger.error("Backlog Generation Agent: Failed to parse JSON response: %s", e)
                 error_msg = {
                     "status": "error",
-                    "error": f"Backlog generation structured output failed: {str(e)}",
+                    "error": f"Failed to parse response as JSON: {str(e)}",
+                    "run_id": run_id
+                }
+                return json.dumps(error_msg, indent=2)
+            except ValidationError as e:
+                logger.error("Backlog Generation Agent: Pydantic validation failed: %s", e)
+                error_msg = {
+                    "status": "error",
+                    "error": f"Backlog generation validation failed: {str(e)}",
                     "run_id": run_id
                 }
                 return json.dumps(error_msg, indent=2)
@@ -266,16 +303,6 @@ def create_backlog_generation_agent(run_id: str):
                     "run_id": run_id
                 }
                 return json.dumps(error_msg, indent=2)
-
-            backlog_items_models = validated.backlog_items
-            # Convert to plain dicts
-            raw_items = []
-            if hasattr(backlog_items_models, "__iter__"):
-                for m in backlog_items_models:
-                    try:
-                        raw_items.append(m.model_dump() if hasattr(m, "model_dump") else m.dict())
-                    except Exception:
-                        raw_items.append(dict(m))
 
             # Normalize and annotate
             processed = BacklogHelper.normalize_items(

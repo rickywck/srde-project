@@ -195,16 +195,56 @@ def create_backlog_regeneration_agent(run_id: str, default_backlog_file: str | N
             "Backlog Regeneration Agent: Updating %s items for run %s", len(existing_items), run_id
         )
         try:
-            result = agent(
-                prompt,
-                structured_output_model=BacklogResponseOut,
-            )
-            validated: BacklogResponseOut = result.structured_output  # type: ignore[assignment]
-        except (StructuredOutputException, ValidationError) as exc:
-            logger.error("Backlog Regeneration Agent structured output failed: %s", exc)
+            # Call agent WITHOUT structured_output_model since the prompt already
+            # specifies response_format: json_object
+            result = agent(prompt)
+            
+            # Extract the text response
+            response_text = ""
+            if hasattr(result, 'output'):
+                response_text = result.output
+            elif hasattr(result, 'text'):
+                response_text = result.text
+            elif hasattr(result, 'content'):
+                response_text = result.content
+            elif isinstance(result, str):
+                response_text = result
+            else:
+                response_text = str(result)
+            
+            logger.info("Backlog Regeneration Agent: Received response length: %d", len(response_text))
+            
+            # Parse JSON response
+            response_data = json.loads(response_text)
+            
+            # Validate with Pydantic
+            validated: BacklogResponseOut = BacklogResponseOut(**response_data)
+            
+            # Convert to plain dicts
+            raw_items: List[Dict[str, Any]] = []
+            for model_item in validated.backlog_items:
+                try:
+                    raw_items.append(
+                        model_item.model_dump() if hasattr(model_item, "model_dump") else model_item.dict()
+                    )
+                except Exception:
+                    raw_items.append(dict(model_item))
+            
+            logger.info("Backlog Regeneration Agent: Validated and extracted %s backlog items", len(raw_items))
+            
+        except json.JSONDecodeError as exc:
+            logger.error("Backlog Regeneration Agent: Failed to parse JSON response: %s", exc)
             error = {
                 "status": "error",
-                "error": f"Backlog regeneration structured output failed: {exc}",
+                "error": f"Failed to parse response as JSON: {exc}",
+                "run_id": run_id,
+            }
+            return json.dumps(error, indent=2)
+        except ValidationError as exc:
+            logger.error("Backlog Regeneration Agent: Pydantic validation failed: %s", exc)
+            error = {
+                "status": "error",
+                "error": f"Backlog regeneration validation failed: {exc}",
                 "run_id": run_id,
             }
             return json.dumps(error, indent=2)
@@ -216,17 +256,6 @@ def create_backlog_regeneration_agent(run_id: str, default_backlog_file: str | N
                 "run_id": run_id,
             }
             return json.dumps(error, indent=2)
-
-        backlog_items_models = validated.backlog_items
-        raw_items: List[Dict[str, Any]] = []
-        if hasattr(backlog_items_models, "__iter__"):
-            for model_item in backlog_items_models:
-                try:
-                    raw_items.append(
-                        model_item.model_dump() if hasattr(model_item, "model_dump") else model_item.dict()
-                    )
-                except Exception:
-                    raw_items.append(dict(model_item))
 
         if not raw_items:
             logger.warning("Backlog Regeneration Agent returned no items; existing backlog left untouched")
