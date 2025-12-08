@@ -26,7 +26,7 @@ class SegmentOut(BaseModel):
         extra = "allow"
 
 
-class SegmentationResponseIn(BaseModel):
+class SegmentationResponseOut(BaseModel):
     segments: List[SegmentOut]
 
     class Config:
@@ -65,7 +65,16 @@ def create_segmentation_agent(run_id: str):
     agent = None
     if model is not None:
         try:
-            agent = Agent(model=model, system_prompt=system_prompt)
+            # Prevent tool/function calls; ensure pure structured JSON responses
+            try:
+                agent = Agent(
+                    model=model,
+                    system_prompt=system_prompt,
+                    disable_tool_calls=True,
+                    max_tool_calls=0,
+                )
+            except TypeError:
+                agent = Agent(model=model, system_prompt=system_prompt)
         except Exception as e:
             logger.exception("Failed to initialize Strands Agent (segmentation): %s", e)
             agent = None
@@ -100,16 +109,27 @@ def create_segmentation_agent(run_id: str):
             try:
                 agent_result = agent(
                     segmentation_prompt,
-                    structured_output_model=SegmentationResponseIn,
+                    structured_output_model=SegmentationResponseOut,
                 )
-                validated: SegmentationResponseIn = agent_result.structured_output  # type: ignore[assignment]
-                # Convert to plain dict for downstream compatibility
+                validated: SegmentationResponseOut = agent_result.structured_output  # type: ignore[assignment]
+                # Convert to plain dict for downstream compatibility and ensure list semantics
                 result: Dict[str, Any] = {"segments": []}
-                for seg in validated.segments:
+                segments_model = getattr(validated, "segments", [])
+                # Defensive: normalize to list even if a single segment is returned incorrectly
+                if isinstance(segments_model, (SegmentOut, dict)):
+                    segments_iter = [segments_model]
+                else:
+                    segments_iter = list(segments_model or [])
+                for seg in segments_iter:
                     try:
-                        seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
+                        if isinstance(seg, SegmentOut):
+                            seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
+                        elif isinstance(seg, dict):
+                            seg_dict = seg
+                        else:
+                            seg_dict = json.loads(str(seg)) if isinstance(seg, str) else dict(seg)
                     except Exception:
-                        seg_dict = dict(seg)
+                        seg_dict = {"raw_text": str(seg)}
                     result["segments"].append(seg_dict)
             except (StructuredOutputException, ValidationError) as e:
                 raise ValueError(f"Structured output failed: {e}")
