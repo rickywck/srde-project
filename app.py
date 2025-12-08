@@ -41,6 +41,13 @@ logging.getLogger("uvicorn.error").setLevel(_level)
 logging.getLogger("uvicorn.access").setLevel(_level)
 logging.getLogger("backlog_generation_agent").setLevel(_level)
 
+# Force specific third-party/child packages to INFO so they do NOT inherit
+# whatever root/logging bootstrap level is provided via env/CLI.
+# Setting the explicit level on the named logger ensures child loggers
+# (e.g. httpcore.*) will use INFO unless they have their own level set.
+for _pkg in ("httpcore", "strands", "openai", "asyncio", "httpx"):
+    logging.getLogger(_pkg).setLevel(logging.INFO)
+
 from agents.supervisor_agent import SupervisorAgent
 from workflows import BacklogSynthesisWorkflow
 from tools.ado_writer_tool import create_ado_writer_tool
