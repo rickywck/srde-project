@@ -105,34 +105,47 @@ def create_segmentation_agent(run_id: str):
             if agent is None:
                 raise ValueError("Segmentation agent not initialized. No model available.")
 
-            # Use Strands with Structured Output
+            # Call agent WITHOUT structured_output_model since the prompt already
+            # specifies response_format: json_object and returns a complete segments array
             try:
-                agent_result = agent(
-                    segmentation_prompt,
-                    structured_output_model=SegmentationResponseOut,
-                )
-                validated: SegmentationResponseOut = agent_result.structured_output  # type: ignore[assignment]
-                # Convert to plain dict for downstream compatibility and ensure list semantics
-                result: Dict[str, Any] = {"segments": []}
-                segments_model = getattr(validated, "segments", [])
-                # Defensive: normalize to list even if a single segment is returned incorrectly
-                if isinstance(segments_model, (SegmentOut, dict)):
-                    segments_iter = [segments_model]
+                agent_result = agent(segmentation_prompt)
+                
+                # Extract the text response
+                response_text = ""
+                if hasattr(agent_result, 'output'):
+                    response_text = agent_result.output
+                elif hasattr(agent_result, 'text'):
+                    response_text = agent_result.text
+                elif hasattr(agent_result, 'content'):
+                    response_text = agent_result.content
+                elif isinstance(agent_result, str):
+                    response_text = agent_result
                 else:
-                    segments_iter = list(segments_model or [])
-                for seg in segments_iter:
-                    try:
-                        if isinstance(seg, SegmentOut):
-                            seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
-                        elif isinstance(seg, dict):
-                            seg_dict = seg
-                        else:
-                            seg_dict = json.loads(str(seg)) if isinstance(seg, str) else dict(seg)
-                    except Exception:
-                        seg_dict = {"raw_text": str(seg)}
-                    result["segments"].append(seg_dict)
-            except (StructuredOutputException, ValidationError) as e:
-                raise ValueError(f"Structured output failed: {e}")
+                    response_text = str(agent_result)
+                
+                logger.info("Segmentation Agent: Received response length: %d", len(response_text))
+                
+                # Parse JSON response
+                result = json.loads(response_text)
+                
+                # Validate with Pydantic
+                validated: SegmentationResponseOut = SegmentationResponseOut(**result)
+                
+                # Convert to plain dicts
+                segments_list = []
+                for seg in validated.segments:
+                    seg_dict = seg.model_dump() if hasattr(seg, "model_dump") else seg.dict()
+                    segments_list.append(seg_dict)
+                
+                result = {"segments": segments_list}
+                logger.info("Segmentation Agent: Validated and extracted %s segments", len(segments_list))
+                
+            except json.JSONDecodeError as e:
+                logger.error("Segmentation Agent: Failed to parse JSON response: %s", e)
+                raise ValueError(f"Failed to parse response as JSON: {e}")
+            except ValidationError as e:
+                logger.error("Segmentation Agent: Pydantic validation failed: %s", e)
+                raise ValueError(f"Response validation failed: {e}")
             
             # Validate structure
             if "segments" not in result:

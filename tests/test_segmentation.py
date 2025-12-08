@@ -8,13 +8,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import asyncio
 import json
 import uuid
-from agents.supervisor_agent import SupervisorAgent
+from agents.segmentation_agent import create_segmentation_agent
 
 
-async def demo_segmentation():
+def test_demo_segmentation():
     """Demonstrate document segmentation with a sample meeting note"""
     
     # Sample meeting notes
@@ -44,10 +43,6 @@ async def demo_segmentation():
     print("SEGMENTATION AGENT DEMO")
     print("=" * 80)
     
-    # Initialize supervisor
-    print("\nInitializing Backlog Synthesizer Supervisor...")
-    supervisor = SupervisorAgent()
-    
     # Generate run ID
     run_id = str(uuid.uuid4())
     print(f"Run ID: {run_id}\n")
@@ -57,34 +52,46 @@ async def demo_segmentation():
     print(sample_document.strip())
     print("-" * 80)
     
-    # Segment the document
-    print("\nSegmenting document...")
-    result = await supervisor.segment_document(run_id, sample_document)
+    # Create segmentation agent
+    print("\nInitializing Segmentation Agent...")
+    segment_tool = create_segmentation_agent(run_id)
     
-    if result['status'] == 'error':
-        print(f"❌ Error: {result['error']}")
+    # Segment the document
+    print("Segmenting document...")
+    result_json = segment_tool(sample_document)
+    
+    # Debug: print raw response
+    print("\n[DEBUG] Raw JSON response:")
+    print(result_json)
+    print("\n")
+    
+    result = json.loads(result_json)
+    
+    if result.get('status') == 'error':
+        print(f"❌ Error: {result.get('error')}")
         return
     
-    print(f"✓ Successfully segmented into {result['total_segments']} segments\n")
+    segments = result.get('segments', [])
+    print(f"✓ Successfully segmented into {len(segments)} segments\n")
     
     # Display each segment
     print("=" * 80)
     print("SEGMENTATION RESULTS")
     print("=" * 80)
     
-    for i, segment in enumerate(result['segments'], 1):
-        print(f"\n📄 SEGMENT {segment['segment_id']}")
+    for i, segment in enumerate(segments, 1):
+        print(f"\n📄 SEGMENT {segment.get('segment_id')}")
         print("-" * 80)
-        print(f"Intent: {segment['dominant_intent']}")
-        print(f"All Intents: {', '.join(segment['intent_labels'])}")
+        print(f"Intent: {segment.get('dominant_intent')}")
+        print(f"All Intents: {', '.join(segment.get('intent_labels', []))}")
         print(f"\nContent:")
-        print(segment['raw_text'])
+        print(segment.get('raw_text', ''))
         print("-" * 80)
     
     # Show file output
-    print(f"\n💾 Segments saved to: {result['segments_file']}")
+    print(f"\n💾 Segments saved to: {result.get('segments_file')}")
     print(f"\nFile format: JSONL (one JSON object per line)")
-    print(f"Total records: {result['total_segments']}")
+    print(f"Total records: {len(segments)}")
     
     print("\n" + "=" * 80)
     print("Next Steps:")
@@ -92,7 +99,11 @@ async def demo_segmentation():
     print("  2. Retrieved context will inform backlog generation")
     print("  3. Generated stories will be tagged relative to existing backlog")
     print("=" * 80 + "\n")
+    
+    # Assert for pytest
+    assert result.get('status') == 'success', f"Segmentation failed: {result.get('error')}"
+    assert len(segments) > 0, "No segments were created"
 
 
 if __name__ == "__main__":
-    asyncio.run(demo_segmentation())
+    test_demo_segmentation()

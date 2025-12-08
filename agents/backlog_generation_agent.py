@@ -71,6 +71,17 @@ def create_backlog_generation_agent(run_id: str):
     system_prompt = prompt_loader.get_system_prompt("backlog_generation_agent")
     # Merge prompt parameters with any params provided by the factory (factory wins)
     prompt_params = prompt_loader.get_parameters("backlog_generation_agent") or {}
+    # Ensure backlog generation agent avoids function/tool-calling to prevent 400 errors
+    # in chat/assistant mode. Prefer deterministic responses; avoid unsupported params.
+    try:
+        prompt_params.setdefault("temperature", 0)
+        # Strip any function/tool-related settings that could trigger tool_calls
+        for key in ["function_call", "functions", "tools"]:
+            if key in prompt_params:
+                prompt_params.pop(key, None)
+    except Exception:
+        # Be defensive; never fail agent creation due to param cleanup
+        pass
 
     def _as_int(v, d):
         try:
