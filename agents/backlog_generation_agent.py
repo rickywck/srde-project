@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 # Pydantic models for strict validation of LLM output
-class BacklogItemIn(BaseModel):
+class BacklogItemOut(BaseModel):
     type: str
     title: str
     description: str | None = None
@@ -31,19 +31,19 @@ class BacklogItemIn(BaseModel):
         extra = "allow"
 
 
-class BacklogResponseIn(BaseModel):
-    backlog_items: List[BacklogItemIn]
+class BacklogResponseOut(BaseModel):
+    backlog_items: List[BacklogItemOut]
 
     class Config:
         extra = "allow"
 
 
-def _pydantic_validate_response(payload: Dict[str, Any]) -> BacklogResponseIn:
+def _pydantic_validate_response(payload: Dict[str, Any]) -> BacklogResponseOut:
     """Validate payload using Pydantic (v1/v2 compatible)."""
     try:
-        return BacklogResponseIn.model_validate(payload)  # type: ignore[attr-defined]
+        return BacklogResponseOut.model_validate(payload)  # type: ignore[attr-defined]
     except AttributeError:
-        return BacklogResponseIn.parse_obj(payload)
+        return BacklogResponseOut.parse_obj(payload)
 
 
 def extract_json(text: str) -> str | None:
@@ -98,7 +98,21 @@ def create_backlog_generation_agent(run_id: str):
     agent = None
     if model is not None:
         try:
-            agent = Agent(model=model, system_prompt=system_prompt)
+            # Ensure the agent NEVER performs tool calls and only returns structured JSON,
+            # mirroring the behavior of the tagging agent.
+            # Some Strands versions support flags like `disable_tool_calls`/`max_tool_calls`.
+            # We attempt to set these defensively; if unsupported, we fallback gracefully.
+            try:
+                agent = Agent(
+                    model=model,
+                    system_prompt=system_prompt,
+                    # Defensive flags to prevent tool calls
+                    disable_tool_calls=True,
+                    max_tool_calls=0,
+                )
+            except TypeError:
+                # Older API without these kwargs; use basic initialization
+                agent = Agent(model=model, system_prompt=system_prompt)
         except Exception as e:
             logger.exception("Failed to initialize Strands Agent: %s", e)
             agent = None
@@ -221,10 +235,10 @@ def create_backlog_generation_agent(run_id: str):
             try:
                 result = agent(
                     prompt,
-                    structured_output_model=BacklogResponseIn,
+                    structured_output_model=BacklogResponseOut,
                 )
                 # Strands returns validated structured output; ensure correct type
-                validated: BacklogResponseIn = result.structured_output  # type: ignore[assignment]
+                validated: BacklogResponseOut = result.structured_output  # type: ignore[assignment]
             except (StructuredOutputException, ValidationError) as e:
                 logger.error("Backlog Generation Agent: Structured output failed: %s", e)
                 error_msg = {

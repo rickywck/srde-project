@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 BacklogInput = Union[Dict[str, Any], List[Dict[str, Any]], None]
 
 
-class BacklogItemIn(BaseModel):
+class BacklogItemOut(BaseModel):
     type: str
     title: str
     description: str | None = None
@@ -34,8 +34,8 @@ class BacklogItemIn(BaseModel):
         extra = "allow"
 
 
-class BacklogResponseIn(BaseModel):
-    backlog_items: List[BacklogItemIn]
+class BacklogResponseOut(BaseModel):
+    backlog_items: List[BacklogItemOut]
 
     class Config:
         extra = "allow"
@@ -197,9 +197,9 @@ def create_backlog_regeneration_agent(run_id: str, default_backlog_file: str | N
         try:
             result = agent(
                 prompt,
-                structured_output_model=BacklogResponseIn,
+                structured_output_model=BacklogResponseOut,
             )
-            validated: BacklogResponseIn = result.structured_output  # type: ignore[assignment]
+            validated: BacklogResponseOut = result.structured_output  # type: ignore[assignment]
         except (StructuredOutputException, ValidationError) as exc:
             logger.error("Backlog Regeneration Agent structured output failed: %s", exc)
             error = {
