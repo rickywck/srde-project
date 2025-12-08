@@ -25,26 +25,6 @@ GENERATED_BACKLOG_FILENAME = "generated_backlog.jsonl"
 USER_STORY_TYPES = {"user story", "story", "user_story"}
 DEFAULT_MIN_SIMILARITY_THRESHOLD = 0.5
 
-# Simple JSON extractor to tolerate minor formatting issues from LLM outputs
-def _extract_json(text: str) -> Dict[str, Any]:
-    """Extract the first top-level JSON object from text.
-
-    Falls back to empty dict if not found or parsing fails.
-    """
-    try:
-        # Fast path: direct parse
-        return json.loads(text)
-    except Exception:
-        pass
-    try:
-        # Regex to find the first {...} block
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            return json.loads(m.group(0))
-    except Exception:
-        pass
-    return {}
-
 # Reference Pydantic model for the agent's structured output (informational only)
 class TaggingDecisionOut(BaseModel):
     decision_tag: str = Field(description="new | gap | duplicate | conflict")
@@ -99,13 +79,20 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
         model = None
         model_id = ModelFactory.get_default_model_id()
 
-    # Instantiate a Strands Agent at factory scope (long-lived within supervisor/runtime),
-    # so that it can be introspected similarly to the segmentation agent.
+    # Instantiate a Strands Agent at factory scope (long-lived within supervisor/runtime)
+    # using structured output with TaggingDecisionOut, so we don't need to do
+    # manual JSON parsing of the LLM response.
     agent = None
     if model is not None:
         try:
-            agent = Agent(model=model, system_prompt=system_prompt)
-            logger.debug("Tagging Agent instance created at factory scope")
+            # Newer Strands/OpenAI models expose a with_structured_output helper.
+            structured_model = getattr(model, "with_structured_output", None)
+            if callable(structured_model):
+                model_for_agent = structured_model(TaggingDecisionOut)
+            else:
+                model_for_agent = model
+            agent = Agent(model=model_for_agent, system_prompt=system_prompt)
+            logger.debug("Tagging Agent instance created at factory scope (structured output)")
         except Exception as e:
             logger.exception("Failed to instantiate Tagging Agent at factory scope: %s", e)
             agent = None
@@ -201,13 +188,12 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 raw_story_json = json.dumps(story_obj, ensure_ascii=False)
             except Exception:
                 raw_story_json = str(story_obj)
-            logger.info("Tagging Agent: Story payload: %s", raw_story_json[:1000])
+            logger.debug("Tagging Agent: Story payload: %s", raw_story_json[:1000])
             logger.info("Tagging Agent: Processing story title='%s' | description='%s…'", title, (story_obj.get('description', '') or '')[:120])
 
             # Retrieve similar stories for current run
             if not similar_local:
                 try:
-                    logger.info("Tagging Agent: Retrieving similar stories from configured index…")
                     retriever = SimilarStoryRetriever(config=None, min_similarity=similarity_threshold)
                     similar_local = retriever.find_similar_stories({
                         "title": story_obj.get("title", ""),
@@ -264,7 +250,7 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 similar_stories_formatted=similar_formatted
             )
 
-            if model is None:
+            if model is None or agent is None:
                 logger.error("Tagging Agent: No model available; skipping LLM evaluation for tagging")
                 return {
                     "status": "error",
@@ -279,22 +265,26 @@ def create_tagging_agent(run_id: str, default_similarity_threshold: float = None
                 }
 
             try:
-                # Call long-lived agent instance
-                resp_raw = agent(user_prompt)
+                # Call long-lived agent instance with structured output. Depending on
+                # the Strands version, this may either return a TaggingDecisionOut
+                # instance directly, or a rich response object with a `.output`
+                # attribute containing the parsed model.
+                resp = agent(user_prompt)
+                parsed: TaggingDecisionOut
 
-                # Normalize response to plain text for logging/parsing
-                if isinstance(resp_raw, (str, bytes)):
-                    resp_text = resp_raw
+                if isinstance(resp, TaggingDecisionOut):
+                    parsed = resp
                 else:
-                    resp_text = getattr(resp_raw, "text", None) or str(resp_raw)
+                    parsed = getattr(resp, "output", None) or getattr(resp, "parsed", None)  # type: ignore[assignment]
+                    if not isinstance(parsed, TaggingDecisionOut):
+                        # Fallback: try to interpret resp as dict/json
+                        try:
+                            raw_dict = resp if isinstance(resp, dict) else json.loads(str(resp))
+                            parsed = TaggingDecisionOut(**raw_dict)
+                        except Exception as e:  # pragma: no cover - defensive
+                            raise StructuredOutputException(f"Could not interpret structured output: {e}")
 
-                logger.info("Tagging Agent: Received response from LLM: %s", resp_text)
-
-                # Extract JSON from text
-                parsed_json = _extract_json(resp_text)
-                if not isinstance(parsed_json, dict) or not parsed_json:
-                    raise ValueError("Failed to extract JSON from agent response")
-                parsed = TaggingDecisionOut(**parsed_json)
+                logger.info("Tagging Agent: Received structured tagging decision: %s", parsed)
                 decision = (parsed.decision_tag or "new").lower()
                 if decision not in {"new", "gap", "duplicate", "conflict"}:
                     decision = "new"
