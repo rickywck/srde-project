@@ -104,31 +104,38 @@ class BacklogSynthesisWorkflow:
         try:
             # Stage 1: Segmentation
             segments = await self._stage_segmentation(document_text)
-            try:
-                await hook.emit(event="progress", agent="segmentation", message=f"Created {len(segments)} segments")
-            except Exception:
-                pass
-            
+            if 'hook' in locals() and hook:
+                try:
+                    await hook.emit(event="progress", agent="segmentation", message=f"Created {len(segments)} segments")
+                except Exception:
+                    pass
+
             # Stage 2 & 3: Retrieval + Generation (per segment)
-            await self._stage_retrieval_and_generation(segments)
-            
+            gen_items = await self._stage_retrieval_and_generation(segments)
+            if hook:
+                try:
+                    await hook.emit(event="progress", agent="generation", message=f"Generated {len(gen_items)} items")
+                except Exception:
+                    pass
+
             # Stage 4: Tagging (per story)
-            await self._stage_tagging()
-            try:
-                # compute simple counts from compiled results later
-                pass
-            except Exception:
-                pass
+            tag_stats = await self._stage_tagging()
+            if hook:
+                try:
+                    await hook.emit(event="progress", agent="tagging", message=f"Tagged {tag_stats.get('processed',0)} stories")
+                except Exception:
+                    pass
             
             # Stage 5: Evaluation (optional, can be called separately)
             # evaluation = await self._stage_evaluation()
             
             # Compile final results
             res = self._compile_results()
-            try:
-                await hook.emit(event="finished", agent="workflow", message="Workflow completed")
-            except Exception:
-                pass
+            if hook:
+                try:
+                    await hook.emit(event="finished", agent="workflow", message="Workflow completed")
+                except Exception:
+                    pass
             return res
             
         except Exception as e:
@@ -159,6 +166,7 @@ class BacklogSynthesisWorkflow:
         from tools.retrieval_backlog_tool import create_retrieval_backlog_tool
         combined_tool = create_retrieval_backlog_tool(self.run_id)
 
+        processed = 0
         for segment in segments:
             seg_id = segment["segment_id"]
             fn = functools.partial(
@@ -175,6 +183,15 @@ class BacklogSynthesisWorkflow:
             except Exception as e:
                 generation_result = {"status": "error", "error": f"Parse generation result failed: {e}", "segment_id": seg_id}
             self.results["generation"].append(generation_result)
+            processed += 1
+            # Emit coarse progress every 5 segments
+            try:
+                from agents.utils.strands_hooks import StrandsHookClient
+                hook = StrandsHookClient(self.run_id)
+                if processed % 5 == 0 or processed == len(segments):
+                    await hook.emit(event="progress", agent="generation", message=f"Processed {processed}/{len(segments)} segments")
+            except Exception:
+                pass
 
         # Consolidate all generated items and rewrite the backlog file atomically
         try:
@@ -197,8 +214,10 @@ class BacklogSynthesisWorkflow:
                 except Exception:
                     pass
             self.log_progress(f"✓ Retrieval & generation completed for all segments (combined) — wrote {len(all_items)} items")
+            return all_items
         except Exception as e:
             self.log_progress(f"⚠ Failed to consolidate backlog items: {e}")
+            return []
     
     async def _stage_tagging(self):
         """Stage 4: Tag generated stories"""
