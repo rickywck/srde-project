@@ -3,12 +3,13 @@ FastAPI application for Backlog Synthesizer POC
 Provides chat interface and API endpoints for document processing
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import asyncio
 import os
 import json
 import uuid
@@ -119,6 +120,83 @@ def save_chat_history(run_id: str, role: str, message: str):
     
     with open(history_file, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+# --- SSE progress support ---
+_EVENT_QUEUES: Dict[str, "asyncio.Queue[Dict[str, Any]]"] = {}
+
+def _get_event_queue(run_id: str) -> "asyncio.Queue[Dict[str, Any]]":
+    q = _EVENT_QUEUES.get(run_id)
+    if q is None:
+        q = asyncio.Queue()
+        _EVENT_QUEUES[run_id] = q
+    return q
+
+def _persist_strands_event(run_id: str, event: Dict[str, Any]):
+    run_dir = get_run_dir(run_id)
+    events_file = run_dir / "strands_events.jsonl"
+    with open(events_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event) + "\n")
+
+@app.post("/strands-hook")
+async def strands_hook(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+    run_id = payload.get("run_id")
+    if not run_id:
+        raise HTTPException(status_code=400, detail="Missing run_id")
+
+    # Normalize event
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "agent": payload.get("agent"),
+        "event": payload.get("event"),
+        "message": payload.get("message"),
+        "meta": payload.get("meta", {}),
+    }
+
+    def _task():
+        try:
+            _persist_strands_event(run_id, event)
+            q = _get_event_queue(run_id)
+            try:
+                q.put_nowait(event)
+            except Exception:
+                logging.getLogger(__name__).debug("Queue put failed for %s", run_id, exc_info=True)
+        except Exception:
+            logging.getLogger(__name__).exception("Strands hook persist failed for %s", run_id)
+
+    background_tasks.add_task(_task)
+    return JSONResponse({"status": "ok"})
+
+@app.get("/events/{run_id}")
+async def sse_events(run_id: str):
+    async def event_generator():
+        q = _get_event_queue(run_id)
+        # On connect: emit connected and replay last 20
+        try:
+            yield f"event: connected\ndata: {json.dumps({'run_id': run_id})}\n\n"
+            events_file = get_run_dir(run_id) / "strands_events.jsonl"
+            if events_file.exists():
+                with open(events_file, "r", encoding="utf-8") as f:
+                    lines = [ln.strip() for ln in f if ln.strip()]
+                for ln in lines[-20:]:
+                    yield f"event: message\ndata: {ln}\n\n"
+        except Exception:
+            pass
+
+        while True:
+            try:
+                evt = await asyncio.wait_for(q.get(), timeout=15.0)
+                yield f"event: message\ndata: {json.dumps(evt)}\n\n"
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logging.getLogger(__name__).exception("SSE loop error for %s", run_id)
+                yield ": error\n\n"
+                await asyncio.sleep(1)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/")
 async def root():

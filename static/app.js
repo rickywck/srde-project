@@ -55,6 +55,36 @@ document.addEventListener('DOMContentLoaded', () => {
     initModelPicker();
 });
 
+// --- Live progress via Server-Sent Events (SSE) ---
+let progressEventSource = null;
+
+function startProgressStream(runId) {
+    if (!runId) return;
+    // Close previous stream if any
+    if (progressEventSource) {
+        try { progressEventSource.close(); } catch (_) {}
+        progressEventSource = null;
+    }
+    progressEventSource = new EventSource(`/events/${runId}`);
+    addMessage('system', `🔌 Live progress connected for run ${runId.substring(0,8)}…`);
+    progressEventSource.addEventListener('message', (e) => {
+        try {
+            const evt = JSON.parse(e.data);
+            const { timestamp, agent, event, message } = evt;
+            const line = `${new Date(timestamp).toLocaleTimeString()} [${agent || 'agent'}] ${event || ''} - ${message || ''}`;
+            addMessage('system', line);
+        } catch (err) {
+            console.error('Failed to parse SSE event', err);
+        }
+    });
+    progressEventSource.addEventListener('connected', () => {
+        // Optional: could display a connected message here
+    });
+    progressEventSource.onerror = () => {
+        console.warn('SSE connection error; keeping connection open');
+    };
+}
+
 function enableChatInterface() {
     if (messageInput) messageInput.disabled = false;
     if (sendBtn) sendBtn.disabled = false;
@@ -314,6 +344,8 @@ async function handleFileUpload(file) {
         
         // Add system message
         addMessage('system', `✅ Document "${file.name}" uploaded successfully!`);
+        // Start live progress stream
+        startProgressStream(currentRunId);
         
         // Load chat history if exists
         await loadChatHistory();
@@ -1047,6 +1079,8 @@ async function loadRun(runId) {
     resetDashboardAgentState();
     runIdDisplay.textContent = `Run: ${runId.substring(0, 8)}...`;
     setDashboardSubtitleForCurrentRun();
+    // Start live progress stream for selected run
+    startProgressStream(currentRunId);
     
     messageInput.disabled = false;
     sendBtn.disabled = false;

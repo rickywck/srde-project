@@ -8,6 +8,8 @@ import os
 import json
 import yaml
 from typing import Dict, Any, List, Optional
+import asyncio
+import functools
 from pathlib import Path
 from datetime import datetime
 # No direct OpenAI/Pinecone usage in the orchestrator
@@ -81,6 +83,12 @@ class BacklogSynthesisWorkflow:
         Returns comprehensive results including all intermediate artifacts.
         """
         self.log_progress("🚀 Starting backlog synthesis workflow")
+        try:
+            from agents.utils.strands_hooks import StrandsHookClient
+            hook = StrandsHookClient(self.run_id)
+            await hook.emit(event="started", agent="workflow", message="Workflow started")
+        except Exception:
+            pass
         self.document_text = document_text  # Store full document text for evaluation
         
         # Clear previous run artifacts to ensure fresh state
@@ -96,18 +104,32 @@ class BacklogSynthesisWorkflow:
         try:
             # Stage 1: Segmentation
             segments = await self._stage_segmentation(document_text)
+            try:
+                await hook.emit(event="progress", agent="segmentation", message=f"Created {len(segments)} segments")
+            except Exception:
+                pass
             
             # Stage 2 & 3: Retrieval + Generation (per segment)
             await self._stage_retrieval_and_generation(segments)
             
             # Stage 4: Tagging (per story)
             await self._stage_tagging()
+            try:
+                # compute simple counts from compiled results later
+                pass
+            except Exception:
+                pass
             
             # Stage 5: Evaluation (optional, can be called separately)
             # evaluation = await self._stage_evaluation()
             
             # Compile final results
-            return self._compile_results()
+            res = self._compile_results()
+            try:
+                await hook.emit(event="finished", agent="workflow", message="Workflow completed")
+            except Exception:
+                pass
+            return res
             
         except Exception as e:
             self.log_progress(f"❌ Workflow failed: {str(e)}")
@@ -118,7 +140,8 @@ class BacklogSynthesisWorkflow:
         self.log_progress("Stage 1: Segmenting document")
         
         segmentation_tool = create_segmentation_agent(self.run_id)
-        seg_result = json.loads(segmentation_tool(document_text))
+        seg_json = await asyncio.to_thread(segmentation_tool, document_text)
+        seg_result = json.loads(seg_json)
         
         if seg_result.get("status") not in ("success", "success_mock"):
             raise ValueError(seg_result.get("error", "Segmentation failed"))
@@ -138,13 +161,15 @@ class BacklogSynthesisWorkflow:
 
         for segment in segments:
             seg_id = segment["segment_id"]
-            gen_json = combined_tool(
+            fn = functools.partial(
+                combined_tool,
                 segment_id=seg_id,
                 segment_text=segment.get("raw_text", ""),
                 intent_labels=segment.get("intent_labels", []),
                 dominant_intent=segment.get("dominant_intent", ""),
                 user_instructions="",
             )
+            gen_json = await asyncio.to_thread(fn)
             try:
                 generation_result = json.loads(gen_json)
             except Exception as e:
@@ -216,7 +241,8 @@ class BacklogSynthesisWorkflow:
                 "internal_id": s.get("internal_id"),
             }
             try:
-                res = json.loads(tagging_tool(payload))
+                out = await asyncio.to_thread(tagging_tool, payload)
+                res = json.loads(out)
                 if isinstance(res, dict) and res.get("status") == "ok":
                     self.results["tagging"].append(res)
                     tag = (res.get("decision_tag") or "unknown").lower()
