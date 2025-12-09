@@ -1,4 +1,4 @@
-# Requirements Document Elaboration (RDE) System
+# Backlog Synthesizer POC
 
 A multi-agent system for synthesizing, refining, and evaluating software backlogs from requirements documents. This system orchestrates specialized AI agents to segment documents, retrieve context, generate backlog items (Epics, Features, Stories), tag them against existing backlogs, and evaluate their quality.
 
