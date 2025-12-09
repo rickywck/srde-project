@@ -272,7 +272,27 @@ async function handleFileUpload(file) {
         });
         
         if (!response.ok) {
-            throw new Error('Upload failed');
+            // Try to get detailed error message from response
+            let errorMessage = 'Upload failed';
+            const contentType = response.headers.get('content-type');
+            
+            try {
+                if (contentType && contentType.includes('application/json')) {
+                    const errorData = await response.json();
+                    if (errorData.detail) {
+                        errorMessage = errorData.detail;
+                    }
+                } else {
+                    const responseText = await response.text();
+                    if (responseText) {
+                        errorMessage = responseText;
+                    }
+                }
+            } catch (parseError) {
+                console.error('Error parsing response:', parseError);
+                errorMessage = `Upload failed (${response.status} ${response.statusText})`;
+            }
+            throw new Error(errorMessage);
         }
         
         const data = await response.json();
