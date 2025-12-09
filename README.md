@@ -26,6 +26,23 @@ The system is built on the **AWS Strands** framework for agent orchestration and
 #### 🔄 Workflows (`workflows/`)
 - **Backlog Synthesis Workflow** (`backlog_synthesis_workflow.py`): Externalized orchestration logic for the full pipeline (Segment → Retrieve → Generate → Tag → Evaluate), separating business logic from the API layer.
 
+## Modes of Operation
+
+There are two primary ways to interact with the system:
+
+- **Workflow Mode (Quick Actions / Workflows):** Uses pre-defined workflows such as `BacklogSynthesisWorkflow` to run the full pipeline in a deterministic, batched manner: segment → retrieve → generate → tag → (optional) evaluate → (optional) write. Ideal for reproducible runs and bulk processing.
+- **Chat Mode (Supervisor Agent):** Conversational interaction via the `Supervisor Agent` where free-form instructions are interpreted and the agent dynamically orchestrates specialized agents and tools. Ideal for iterative refinement and human-in-the-loop workflows.
+
+Both modes share the same Agents and Tools and persist artifacts under `runs/{run_id}` for consistent outputs.
+
+## Agents vs Tools
+
+To make responsibilities clear, the repo separates LLM-driven components (Agents) from deterministic connectors/helpers (Tools):
+
+- **Agents** include: `Supervisor Agent`, `Segmentation Agent`, `Backlog Generation Agent`, `Backlog Regeneration Agent`, `Tagging Agent`, `Evaluation Agent`.
+- **Tools** include: `Retrieval Tool`, `Retrieval Backlog Tool` (combined retrieval+generation helper), `ADO Writer Tool`, and ingestion utilities.
+
+
 #### 📥 Ingestion (`ingestion/`)
 - **ADO Loader** (`ado_loader.py`): CLI script to ingest existing ADO backlogs into Pinecone.
 - **Architecture Loader** (`arch_loader.py`): CLI script to ingest architecture documentation into Pinecone.

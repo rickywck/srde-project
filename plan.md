@@ -1,8 +1,8 @@
-# Plan: Backlog Synthesizer POC (Simplified)
+# Plan: Backlog Synthesizer POC
 
 ## 0. Scope & Goals
 
-This simplified POC keeps the **same high-level architecture and flow** as the full plan, but:
+This simplified POC keeps the **same high-level architecture and flow** as the full features application, but:
 - Focuses on a **single project** and a **single environment**.
 - Reduces configuration surface (hard-coded defaults where reasonable).
 
@@ -17,63 +17,73 @@ Primary goals for the POC:
 
 ### 1.1 Architecture Diagram
 
-The system follows a multi-agent architecture where a Supervisor orchestrates specialized agents to process meeting notes and generate backlog items:
+The system follows a multi-agent architecture where a Supervisor orchestrates specialized agents to process meeting notes and generate backlog items. Agents (LLM-driven) and Tools (connectors/helpers) are shown in separate clusters below:
 
 ```mermaid
 graph TB
+  subgraph UIAPI [UI / API]
     User[User] -->|Upload document & chat| UI[Chat Interface]
     UI -->|Instructions| API[FastAPI Backend]
-    
-    API -->|Raw document| Supervisor[Supervisor Agent]
-    
+  end
+
+  API -->|Raw document| Supervisor[Supervisor Agent]
+
+  subgraph AGENTS [Agents - LLM driven]
     Supervisor -->|Document text| SegAgent[Segmentation Agent]
     SegAgent -->|Segments + intents| Supervisor
-    
-    Supervisor -->|Per segment| Retrieval[Retrieval Tool]
-    Retrieval -->|Query| PineconeADO[("Pinecone: ADO Backlog")]
-    Retrieval -->|Query| PineconeArch[("Pinecone: Architecture")]
-    PineconeADO -->|Relevant items| Retrieval
-    PineconeArch -->|Relevant constraints| Retrieval
-    Retrieval -->|Context| Supervisor
-    
+
     Supervisor -->|Segment + context| GenAgent[Backlog Generation Agent]
     GenAgent -->|Epics/Features/Stories| Supervisor
-    
+
     Supervisor -->|Per story| TagAgent[Tagging Agent]
-    TagAgent -->|Query existing stories| PineconeADO
-    PineconeADO -->|Similar stories| TagAgent
     TagAgent -->|Tag: new/gap/conflict| Supervisor
-    
-    Supervisor -->|Optional: write items| ADOTool[ADO Writer Tool]
-    ADOTool -->|Create items| ADO[Azure DevOps]
-    
+    Supervisor -->|Edit / refine| RegenAgent[Backlog Regeneration Agent]
+    RegenAgent -->|Updated items| Supervisor
+
     Supervisor -->|Generated items + context| EvalAgent[Evaluation Agent]
     EvalAgent -->|Quality scores & feedback| Supervisor
-    
-    Supervisor -->|Results| API
-    API -->|Generated backlog| UI
-    UI -->|Display results| User
-    
-    style Supervisor fill:#e1f5ff,stroke:#01579b,stroke-width:3px
-    style SegAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style GenAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style TagAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style EvalAgent fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    style ADOTool fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    style PineconeADO fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
-    style PineconeArch fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+  end
+
+  subgraph TOOLS [Tools & Vector Store]
+    Supervisor -->|Per segment| Retrieval[Retrieval Tool]
+    Retrieval -->|Query| PineconeADO[Pinecone ADO Backlog]
+    Retrieval -->|Query| PineconeArch[Pinecone Architecture]
+    PineconeADO -->|Relevant items| Retrieval
+    PineconeArch -->|Relevant constraints| Retrieval
+
+    Supervisor -->|Optional: write items| ADOTool[ADO Writer Tool]
+    ADOTool -->|Create items| ADO[Azure DevOps]
+  end
+
+  Supervisor -->|Results| API
+  API -->|Generated backlog| UI
+  UI -->|Display results| User
+
+  classDef agent fill:#fff3e0,stroke:#e65100,stroke-width:1px;
+  classDef tool fill:#e8f5e9,stroke:#1b5e20,stroke-width:1px;
+  class Supervisor,SegAgent,GenAgent,TagAgent,EvalAgent,RegenAgent agent;
+  class Retrieval,ADOTool,PineconeADO,PineconeArch tool;
 ```
 
-### 1.2 Agent Roles
+### 1.2 Agents and Tools
 
-- **Supervisor Agent**: Orchestrates the entire workflow, manages state, and decides when to invoke specialized agents or tools.
-- **Segmentation Agent**: Splits documents into coherent segments and identifies intents.
-- **Retrieval Tool**: Tool invoked by Supervisor to search Pinecone for relevant ADO backlog items and architecture constraints.
-- **Backlog Generation Agent**: Creates epics, features, and user stories from segments with retrieved context.
-- **Backlog Regeneration Agent**: Updates existing backlog items based on user instructions (e.g., "Make story X more detailed").
-- **Tagging Agent**: Classifies generated stories relative to existing backlog (new/gap/conflict/duplicate).
-- **Evaluation Agent**: LLM-as-a-judge that evaluates quality of generated backlog items across multiple dimensions (completeness, relevance, quality).
-- **ADO Writer Tool**: Optional tool invoked by Supervisor to persist items to Azure DevOps.
+To avoid confusion, we group the runtime components into two categories: **Agents** (LLM-driven orchestrators and reasoners) and **Tools** (deterministic helpers or connectors).
+
+Agents:
+
+- **Supervisor Agent**: Orchestrates the overall processing for chat-driven requests, manages session state, and decides when to invoke agents or tools.
+- **Segmentation Agent**: Splits documents into coherent segments and identifies intents (returns structured JSON segments).
+- **Backlog Generation Agent**: Generates epics, features, and user stories from a segment plus retrieved context.
+- **Backlog Regeneration Agent**: Applies user edits or refinement instructions to existing backlog items.
+- **Tagging Agent**: Classifies generated stories relative to existing backlog (e.g., `new`, `gap`, `conflict`, `duplicate`).
+- **Evaluation Agent**: LLM-as-a-judge that assesses generated backlog quality (completeness, relevance, quality, overall score).
+
+Tools:
+
+- **Retrieval Tool**: Queries the vector store (Pinecone) for relevant ADO backlog items and architecture constraint chunks.
+- **Retrieval Backlog Tool (combined)**: High-level tool that performs retrieval and then invokes the Backlog Generation Agent (used by both Supervisor and workflow runners).
+- **ADO Writer Tool**: Connector that persists selected backlog items to Azure DevOps via REST API.
+- **External Loaders (CLI)**: One-off utilities to ingest ADO backlog and architecture docs into the vector store (see Section 3).
 
 ### 1.3 Data Flow
 
@@ -90,19 +100,23 @@ graph TB
 
 ---
 ## 2. Minimal Architecture Components
-Components (kept from full design, simplified behavior):
-- **External Loaders (CLI):**
-  - ADO Backlog Loader: one-time/manual load of Epics/Features/Stories.
-  - Architecture Loader: one-time/manual load of constraint docs.
-- **Upload & Run API:** Simple FastAPI app with 3–4 endpoints.
-- **Segmentation Agent:** Single LLM call to segment document + label intents.
-- **Supervisor:** Orchestrates segmentation, retrieval, generation, tagging, and evaluation.
-- **Backlog Generation Agent:** LLM that takes one segment + retrieved context and outputs epics/features/stories.
-- **Backlog Regeneration Agent:** LLM that updates existing backlog items based on user feedback.
-- **Retrieval Backlog Tool:** Combined tool that orchestrates retrieval and generation (primary entry point).
-- **Tagging Agent:** LLM that takes one generated user story + retrieved existing stories and outputs a tag.
-- **Evaluation Agent:** LLM-as-a-judge that evaluates generated backlog quality across multiple dimensions.
-- **ADO Writer (optional for POC):** Simple script to create new items only (no modify/patch logic).
+Components (kept from full design, simplified behavior). Grouped by Agents vs Tools to make responsibilities clear:
+
+Agents:
+- **Supervisor Agent**: Chat-driven orchestrator for interactive requests and session-managed flows.
+- **Segmentation Agent**: Produces `segments.jsonl` with intents and ordering.
+- **Backlog Generation Agent**: Produces epics/features/stories from a segment + context.
+- **Backlog Regeneration Agent**: Edits or refines existing backlog items per user instructions.
+- **Tagging Agent**: Classifies stories (`new|gap|conflict|duplicate`).
+- **Evaluation Agent**: Scores generated backlog items across multiple quality dimensions.
+
+Tools & Utilities:
+- **External Loaders (CLI)**: `ado_loader.py`, `arch_loader.py` — one-time ingestion of ADO backlog and architecture docs into Pinecone.
+- **Upload & Run API**: FastAPI app exposing endpoints for upload, chat, and retrieval of artifacts.
+- **Retrieval Tool**: Low-level connector to query the vector store for relevant items.
+- **Retrieval Backlog Tool**: Combined retrieval+generation helper used as the main entrypoint for per-segment production.
+- **ADO Writer Tool**: Connector to persist items to Azure DevOps (used by Supervisor on explicit write requests).
+
 
 Non-goals / out-of-scope for this POC:
 - Complex retry policies, cost monitoring, or multi-project routing.
@@ -143,11 +157,30 @@ Non-goals / out-of-scope for this POC:
 No retries, no observability, no JSONL artifacts required for POC (optional to add).
 
 ---
-## 4. Chat Interface & API (Enhanced)
+## 4. Chat Interface & API 
 
 Implement a FastAPI app `app.py` with a **chat-based interface** that allows users to interact conversationally with the system:
 
-### 4.1 Backend Endpoints
+## 4.1 Modes of Operation
+
+The system exposes two primary modes of operation for users to interact with the backlog synthesizer:
+
+- **Workflow Mode (Quick Actions):**
+  - Triggered via the front-end quick action buttons (for example: `Generate Backlog`, `Show Tagging Results`, `Write to ADO`).
+  - Requests are handled by pre-defined, provider-agnostic workflows (e.g. the `BacklogSynthesisWorkflow`) that run the full pipeline in a deterministic, batched manner: segment → retrieve → generate → tag → (optional) evaluate → (optional) write.
+  - Use cases: one-click runs, reproducible pipelines, bulk processing, and UI-driven automation where minimal conversational state is required.
+
+- **Chat Mode (Supervisor):**
+  - Triggered via the chat input where users send free-form natural language instructions.
+  - Requests are handled by the `Supervisor Agent`, which interprets the instruction and dynamically orchestrates specialized agents and tools (segmentation agent, retrieval/generation tools, tagging, evaluation, ADO writer, etc.).
+  - Use cases: exploratory queries, iterative refinement, ad-hoc edits, and operations that benefit from human-in-the-loop decisioning.
+
+Notes:
+- Both modes reuse the same underlying agents, tools, and on-disk artifacts under `runs/{run_id}`, ensuring consistent inputs and outputs across modes.
+- Workflow mode favors predictability and minimal conversation state; Chat mode favors flexibility and interactive control.
+- The front-end should map quick action buttons to workflow invocations and the chat input to Supervisor-driven orchestration.
+
+### 4.2 Backend Endpoints
 
 - `POST /upload`:
   - Multipart file upload.
@@ -170,7 +203,7 @@ Implement a FastAPI app `app.py` with a **chat-based interface** that allows use
 - `GET /chat-history/{run_id}`:
   - Returns conversation history for the run.
 
-### 4.2 Front-end: Chat Interface
+### 4.3 Front-end
 
 - Single-page application with:
   - **File upload area**: Drag-and-drop or button to upload meeting notes/transcripts.
@@ -181,7 +214,8 @@ Implement a FastAPI app `app.py` with a **chat-based interface** that allows use
   - **Results panel**: 
     - Display generated backlog items in expandable cards.
     - Show tagging results with color-coded tags (new=green, gap=blue, conflict=red).
-### 4.3 Conversational Capabilities
+  
+### 4.4 Conversational Capabilities
 
 The chat interface allows users to:
 - Request backlog generation: "Analyze this document and create backlog items"
@@ -192,11 +226,8 @@ The chat interface allows users to:
 - Ask for explanations: "Why was story X tagged as conflict?", "What are the quality issues with the generated items?"
 
 The Supervisor Agent interprets these natural language instructions and orchestrates the appropriate workflow.
-
-The Supervisor Agent interprets these natural language instructions and orchestrates the appropriate workflow.
-
 ---
-## 5. Segmentation Agent (Simplified)
+## 5. Segmentation Agent
 
 **Input:** Full document text.
 
@@ -219,7 +250,7 @@ The Supervisor Agent interprets these natural language instructions and orchestr
 - No advanced quality heuristics, merging, or token metrics; only basic segmentation.
 
 ---
-## 6. Per-Segment Retrieval & Generation (Simplified)
+## 6. Per-Segment Retrieval & Generation
 
 The Supervisor invokes the **Retrieval Backlog Tool** (combined retrieval + generation) for each segment.
 
@@ -278,7 +309,7 @@ The **Backlog Regeneration Agent** allows users to refine generated items via ch
 - **Output:** Updated `generated_backlog.jsonl`.
 
 ---
-## 7. Per-Story Retrieval & Tagging (Simplified)
+## 7. Per-Story Retrieval & Tagging
 
 Once all segments are processed and backlog items are generated:
 
@@ -362,10 +393,6 @@ Each evaluation record provided to the Supervisor (e.g. from `datasets/tagging_t
 - Entire `existing_stories` snapshot is given verbatim to the Tagging Agent.
 - Guarantees consistent inputs across runs → stable evaluation metrics.
 - Still uses identical prompt structure & decision taxonomy (`new | gap | conflict`).
-
-#### 7.4.5 Optional Enhancements (Future)
-- Add a lightweight consistency check comparing direct-mode tag vs pipeline-mode tag for the same story.
-- Include a confidence score (LLM self-assessment) to analyze correlation with errors.
 
 #### 7.4.6 Integration With Evaluation (Section 9)
 The file `eval/tagging_predictions.jsonl` is consumed by the tagging evaluation script to compute TP/FP/FN without re-running the agent. If predictions file exists, the evaluation script may skip live inference for faster iterative metric calculation.
@@ -529,20 +556,8 @@ Implemented in `agents/evaluation_agent.py`:
 6. In live mode: writes to `runs/{run_id}/evaluation.jsonl`
 7. In batch mode: aggregates scores and returns summary statistics
 
-**Prompt Template Structure**:
 
-```
-You are an expert product manager and backlog quality evaluator. Evaluate the generated backlog items based on the original segment and context provided.
-
-## Original Segment:
-{segment_text}
-
-## Retrieved Context:
-### Existing ADO Items:
-{retrieved_ado_items}
-
-
-### 9.3 Combined Evaluation Report
+### 9.3 Evaluation Report
 
 A summary script `evaluate/generate_eval_report.py` combines both evaluation results:
 - Tagging accuracy metrics (precision/recall/F1) from Section 9.1
@@ -591,6 +606,7 @@ pinecone:
   api_key_env_var: PINECONE_API_KEY
   index_name: brd-poc
   environment: us-east-1
+  project: poc
 
 openai:
   api_key_env_var: OPENAI_API_KEY
@@ -598,13 +614,17 @@ openai:
   chat_model: gpt-4o
 
 retrieval:
-  min_similarity_threshold: 0.7  # Filter out results below this score
-
-project:
-  name: your-project
+  ado:
+    top_k: 5
+    min_similarity_threshold: 0.6
+  architecture:
+    top_k: 5
+    min_similarity_threshold: 0.6
 ```
 
 No per-feature toggles, no thresholds configuration. Any extra knobs (e.g. `top_k`) can be hard-coded constants in code for this POC.
+
+Agent specific configurations are defined in the separated section of individual prompt file.
 
 ---
 ## 11. POC Success Criteria
@@ -617,6 +637,3 @@ The POC is considered successful if we can:
   - See each story tagged as new/gap/extend/conflict with at least **plausible** reasoning.
 - Inspect all artifacts under `runs/{run_id}/` to manually verify quality.
 
-Future iterations can then:
-- Add formal evaluation (F1), retries, constraint checks, and richer observability.
-- Generalize configuration, support multiple projects/environments, and refine prompts.
