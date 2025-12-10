@@ -4,7 +4,7 @@ A multi-agent system for synthesizing, refining, and evaluating software backlog
 
 ## 🏗 Architecture
 
-The system is built on the **AWS Strands** framework for agent orchestration and uses **Pinecone** for vector storage and **OpenAI** for LLM capabilities.
+The system is built on the **AWS Strands** framework for agent orchestration and uses **Pinecone** for vector storage and **OpenAI** for LLM capabilities. p.s. refer to plan.md for overall architecture and key design decisions - the file was also used as plan for initial code generation with GitHub Copilot
 
 ### Core Components
 
