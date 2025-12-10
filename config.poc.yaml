@@ -15,6 +15,7 @@ openai:
   chat_model: gpt-4o-mini
   embedding_dimensions: 512
 
+# parameters for retrieval tools
 retrieval:
   ado:
     top_k: 5

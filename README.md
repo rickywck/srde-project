@@ -58,17 +58,18 @@ YAML-based prompt templates for all agents, managed via `prompt_loader.py`.
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Python 3.9+
+- Python 3.9+ (tested with 3.12.12)
 - OpenAI API Key
 - Pinecone API Key & Index
 - Azure DevOps PAT (for ADO integration)
+- Langfuse API Key (for observability)
 
 ### Installation
 
 1. **Clone the repository**
    ```bash
    git clone <repo-url>
-   cd rde/v2
+   cd srde-project
    ```
 
 2. **Install dependencies**
@@ -77,13 +78,12 @@ YAML-based prompt templates for all agents, managed via `prompt_loader.py`.
    ```
 
 3. **Configure Environment**
-   Create a `.env` file:
+   Create a `.env` file from .env.example:
    ```env
    OPENAI_API_KEY=sk-...
    PINECONE_API_KEY=...
    ADO_PAT=...
-   ADO_ORG=...
-   ADO_PROJECT=...
+   LANGFUSE_XXX=...
    ```
 
 4. **Update Configuration**
@@ -108,13 +108,16 @@ python app.py
 ```
 
 #### 3. Evaluation
-Run evaluation scripts to assess performance:
-```bash
-# Generate test dataset
-python evaluate/generate_eval_dataset.py --output eval/datasets/test.jsonl
+There are two types of evaluation: 
 
+(i) LLM-as-a-judge - an agent is implemented which can be triggered from UI
+
+(ii) Offline evaluation against a pre-define data set (default path is eval/dataset/eval_dataset.jsonl)
+
+Run evaluation scripts to offline evaluation:
+```bash
 # Run tagging evaluation (against evaluation data set)
-python evaluate/evaluate_tagging.py --threshold 0.6
+python evaluate/evaluate_tagging.py 
 ```
 
 ## 📂 Project Structure
