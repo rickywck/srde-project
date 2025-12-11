@@ -53,6 +53,7 @@ from agents.supervisor_agent import SupervisorAgent
 from workflows import BacklogSynthesisWorkflow
 from tools.ado_writer_tool import create_ado_writer_tool
 from tools.file_extractor import FileExtractor
+from utils.document_limits import DocumentLimitUtils
 
 app = FastAPI(title="Backlog Synthesizer POC")
 
@@ -218,47 +219,6 @@ async def get_config():
         return JSONResponse(content={"openai_model": None})
 
 
-def estimate_token_count(text: str) -> int:
-    """
-    Estimate token count for text using a simple heuristic.
-    OpenAI's tokenizer typically uses ~1 token per 4 characters on average.
-    For more accuracy, use tiktoken library if available.
-    
-    Args:
-        text: The text to estimate token count for
-        
-    Returns:
-        Estimated token count
-    """
-    try:
-        import tiktoken
-        encoding = tiktoken.encoding_for_model("gpt-4o")
-        tokens = encoding.encode(text)
-        return len(tokens)
-    except ImportError:
-        # Fallback: rough estimate (1 token ≈ 4 characters)
-        return len(text) // 4
-
-
-def get_segmentation_max_completion_tokens() -> int:
-    """
-    Get max_completion_tokens from segmentation_agent configuration.
-    
-    Returns:
-        max_completion_tokens value from config, defaults to 5000
-    """
-    try:
-        prompt_config_path = Path(__file__).parent / "prompts" / "segmentation_agent.yaml"
-        if prompt_config_path.exists():
-            with open(prompt_config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-                return config.get("parameters", {}).get("max_completion_tokens", 5000)
-    except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.warning("Failed to read segmentation_agent config: %s, using default 5000", e)
-    return 5000
-
-
 @app.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
     """
@@ -285,17 +245,18 @@ async def upload_document(file: UploadFile = File(...)):
             )
         
         # Check token size against max_completion_tokens
-        token_count = estimate_token_count(text)
-        max_completion_tokens = get_segmentation_max_completion_tokens()
-        max_allowed_tokens = max_completion_tokens * 0.5  # 50% threshold
-        
+        metrics = DocumentLimitUtils.analyze_document(text)
+        token_count = metrics["token_count"]
+        max_completion_tokens = metrics["max_completion_tokens"]
+        max_allowed_tokens = metrics["max_allowed_tokens"]
+
         if token_count > max_allowed_tokens:
             logger = logging.getLogger(__name__)
-            logger.warning("File too large: run_id=%s, tokens=%d, max_allowed=%.0f, max_completion=%d", 
+            logger.warning("File too large: run_id=%s, tokens=%d, max_allowed=%d, max_completion=%d", 
                           run_id, token_count, max_allowed_tokens, max_completion_tokens)
             raise HTTPException(
                 status_code=413,
-                detail=f"File is too large for processing. Token count: {token_count} exceeds limit of {int(max_allowed_tokens)} tokens (50% of {max_completion_tokens} max_completion_tokens). Please use a smaller file."
+                detail=DocumentLimitUtils.build_over_limit_message(metrics)
             )
         
         # Save extracted text to raw.txt and uploaded.txt (for troubleshooting)

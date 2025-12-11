@@ -7,6 +7,7 @@ import os
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from mcp import StdioServerParameters, stdio_client
 from strands import Agent
 from strands.telemetry import StrandsTelemetry
 from strands.session.file_session_manager import FileSessionManager
@@ -24,7 +25,8 @@ from agents.evaluation_agent import create_evaluation_agent
 from agents.prompt_loader import get_prompt_loader
 from tools.retrieval_backlog_tool import create_retrieval_backlog_tool
 import base64
-from tools.utils.token_utils import estimate_tokens
+from utils.document_limits import DocumentLimitUtils
+from strands.tools.mcp import MCPClient
 
 # Build Basic Auth header.
 LANGFUSE_AUTH = base64.b64encode(
@@ -72,9 +74,15 @@ class SupervisorAgent:
         # Track current run_id for tools
         self.current_run_id = None
 
-    # Removed: _load_config, _safe_json_extract, _extract_tool_call
-
-    
+        # Create MCP client with stdio transport
+        """
+        mcp_client_ado = MCPClient(lambda: stdio_client(
+            StdioServerParameters(
+                command="npx",
+                args=["@tiberriver256/mcp-server-azure-devops"]
+            )
+        ))
+        """
     
     async def process_message(
         self,
@@ -180,9 +188,35 @@ class SupervisorAgent:
         # Build context-aware query for the agent
         query_parts = []
         if document_text:
+            metrics = DocumentLimitUtils.analyze_document(document_text)
+            token_count = metrics["token_count"]
+            max_completion_tokens = metrics["max_completion_tokens"]
+            max_allowed_tokens = metrics["max_allowed_tokens"]
+
+            if token_count > max_allowed_tokens:
+                self.logger.warning(
+                    "Supervisor: Document too large for segmentation (tokens=%d limit=%d run_id=%s)",
+                    token_count,
+                    max_allowed_tokens,
+                    run_id,
+                )
+                error_message = DocumentLimitUtils.build_over_limit_message(metrics)
+                return {
+                    "response": error_message,
+                    "status": {
+                        "run_id": run_id,
+                        "error": "document_too_large",
+                        "token_count": token_count,
+                        "token_limit": max_allowed_tokens,
+                        "mode": "strands_orchestration",
+                        "framework": "aws_strands",
+                        "session_managed": True,
+                    },
+                }
+
             context_msg = f"""[CONTEXT] The user has uploaded a document. Here's the content:
 
-{document_text[:3000]}{"..." if len(document_text) > 3000 else ""}
+{document_text}
 """
             query_parts.append(context_msg)
         if instruction_type:
