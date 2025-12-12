@@ -1,3 +1,8 @@
+"""Factory utilities to create and configure OpenAI model instances.
+
+Centralizes configuration loading and defaulting logic for model instantiation.
+"""
+
 import os
 import logging
 from typing import Dict, Any, Optional

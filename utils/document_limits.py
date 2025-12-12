@@ -1,3 +1,9 @@
+"""Utilities for document size and token limit calculations used by segmentation and agents.
+
+This module exposes helpers to read segmentation prompt configuration and
+resolve sensible token limits for downstream model calls.
+"""
+
 import logging
 from functools import lru_cache
 from pathlib import Path

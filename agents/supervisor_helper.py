@@ -1,3 +1,9 @@
+"""Helpers for supervising agent runs, token logging, and side-effect detection.
+
+Provides SupervisorRunHelper which instruments agent runs: token estimation,
+pre/post snapshots, and optional auto-tagging behavior.
+"""
+
 import json
 import re
 from collections import Counter

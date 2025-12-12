@@ -1,3 +1,9 @@
+"""MCP ADO integration tool to process Azure DevOps related queries.
+
+Exposes `mcp_ado_tool(query: str)` as a Strands tool to route queries to the
+MCP server and return helpful Azure DevOps responses.
+"""
+
 import os
 from pathlib import Path
 
