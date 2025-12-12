@@ -415,6 +415,8 @@ async def chat(run_id: str, message: ChatMessage):
     except HTTPException:
         raise
     except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception("Chat failed for run_id=%s: %s", run_id, str(e))
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
 
 @app.get("/chat-history/{run_id}")

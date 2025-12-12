@@ -28,6 +28,9 @@ import base64
 from utils.document_limits import DocumentLimitUtils
 from strands.tools.mcp import MCPClient
 
+from tools.mcp_ado import mcp_ado_tool
+
+
 # Build Basic Auth header.
 LANGFUSE_AUTH = base64.b64encode(
     f"{os.environ.get('LANGFUSE_PUBLIC_KEY')}:{os.environ.get('LANGFUSE_SECRET_KEY')}".encode()
@@ -73,16 +76,6 @@ class SupervisorAgent:
 
         # Track current run_id for tools
         self.current_run_id = None
-
-        # Create MCP client with stdio transport
-        """
-        mcp_client_ado = MCPClient(lambda: stdio_client(
-            StdioServerParameters(
-                command="npx",
-                args=["@tiberriver256/mcp-server-azure-devops"]
-            )
-        ))
-        """
     
     async def process_message(
         self,
@@ -166,7 +159,8 @@ class SupervisorAgent:
                     tagging_agent,
                     retrieval_backlog_tool,
                     evaluation_agent,
-                    ado_writer_tool
+                    ado_writer_tool,
+                    mcp_ado_tool
                 ],
                 session_manager=session_manager,
                 trace_attributes={
